@@ -1,0 +1,145 @@
+getgenv().webhook_url = "https://discordapp.com/api/webhooks/1452235680481808405/vn8oLOAUlkjzCgipqfsvWWNM-Lt_pG-DF61BbicYy7oTbO9P-1cHZmnamgSuyBNEVtGV"
+
+-------------------------------------------------------------------
+-- ตรวจสอบ Config ก่อนเริ่มทำงาน
+-------------------------------------------------------------------
+local WEBHOOK_URL = getgenv().webhook_url
+
+if not WEBHOOK_URL or WEBHOOK_URL == "" then
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Config Error",
+        Text = "กรุณาใส่ getgenv().webhook_url ก่อนรันสคริปต์!",
+        Duration = 10
+    })
+    return warn("หา Webhook URL ไม่เจอ! กรุณาตั้งค่า getgenv().webhook_url")
+end
+
+-------------------------------------------------------------------
+-- Main Script Start
+-------------------------------------------------------------------
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local LocalPlayer = Players.LocalPlayer
+
+-- ตรวจสอบ Executor
+local http_request = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+if not http_request then 
+    return game.StarterGui:SetCore("SendNotification", {Title = "Error", Text = "Executor ไม่รองรับ HTTP Request", Duration = 5}) 
+end
+
+-- รอ GUI โหลด
+local InventoryGui = LocalPlayer.PlayerGui:WaitForChild("Inventory", 30)
+if not InventoryGui then return warn("หา Inventory ไม่เจอ") end
+local MoneyLabel = InventoryGui:WaitForChild("CanvasGroup").Main.Body.Cash.Main.Amount
+
+-------------------------------------------------------------------
+-- [Utility] ฟังก์ชันแปลงเงิน (ตัดลูกน้ำออก)
+-------------------------------------------------------------------
+local function parseMoney(str)
+    if not str then return 0 end
+    local cleanStr = string.gsub(str, "%D", "") -- เอาเฉพาะตัวเลข
+    return tonumber(cleanStr) or 0
+end
+
+-------------------------------------------------------------------
+-- [Image] ดึงรูป Profile Avatar
+-------------------------------------------------------------------
+local userId = LocalPlayer.UserId
+local finalProfilePic = "https://tr.rbxcdn.com/53eb9b17fe1432a809c73a132aa47571/150/150/AvatarHeadshot/Png" -- Default
+
+task.spawn(function()
+    pcall(function()
+        local response = http_request({
+            Url = "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds="..userId.."&size=420x420&format=Png&isCircular=false",
+            Method = "GET"
+        })
+        if response and response.Body then
+            local data = HttpService:JSONDecode(response.Body)
+            if data.data and data.data[1] then 
+                finalProfilePic = data.data[1].imageUrl 
+            end
+        end
+    end)
+end)
+
+-------------------------------------------------------------------
+-- [Logic] ระบบส่ง Webhook
+-------------------------------------------------------------------
+local previousMoney = parseMoney(MoneyLabel.Text) -- จำค่าเงินเริ่มต้น
+
+local function SendWebhook(currentMoneyText, diffAmount)
+    local currentTime = os.date("%d/%m/%Y - %H:%M:%S")
+    
+    local diffString = ""
+    local embedColor = 0xFFD700 -- สีทอง
+
+    if diffAmount > 0 then
+        diffString = "+ " .. tostring(diffAmount) .. " 📈"
+        embedColor = 0x00FF00 -- เขียว
+    elseif diffAmount < 0 then
+        diffString = tostring(diffAmount) .. " 📉"
+        embedColor = 0xFF0000 -- แดง
+    else
+        return -- ถ้าไม่มีการเปลี่ยนแปลง (เผื่อไว้) ไม่ต้องส่ง
+    end
+
+    local embedData = {
+        ["username"] = LocalPlayer.Name,
+        ["avatar_url"] = finalProfilePic,
+        ["embeds"] = {{
+            ["title"] = "Hopper Hub",
+            ["color"] = embedColor,
+            ["thumbnail"] = { ["url"] = finalProfilePic },
+            ["fields"] = {
+                {
+                    ["name"] = "👤 Player",
+                    ["value"] = "["..LocalPlayer.Name.."](https://www.roblox.com/users/"..userId.."/profile)",
+                    ["inline"] = true
+                },
+                {
+                    ["name"] = "💰 Change",
+                    ["value"] = "```diff\n" .. diffString .. "\n```",
+                    ["inline"] = true
+                },
+                {
+                    ["name"] = "💸 Current Balance",
+                    ["value"] = "**"..currentMoneyText.."**",
+                    ["inline"] = false
+                }
+            },
+            ["footer"] = { ["text"] = currentTime }
+        }}
+    }
+
+    http_request({
+        Url = WEBHOOK_URL,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = HttpService:JSONEncode(embedData)
+    })
+end
+
+-------------------------------------------------------------------
+-- [Loop] ดักจับการเปลี่ยนแปลง
+-------------------------------------------------------------------
+local isSending = false
+
+MoneyLabel:GetPropertyChangedSignal("Text"):Connect(function()
+    if isSending then return end
+    isSending = true
+    
+    task.wait(1.5) -- Debounce: รอให้ตัวเลขหยุดวิ่ง
+    
+    local currentText = MoneyLabel.Text
+    local currentVal = parseMoney(currentText)
+    local difference = currentVal - previousMoney
+    
+    if difference ~= 0 then
+        SendWebhook(currentText, difference)
+        previousMoney = currentVal -- อัปเดตค่าเก่า
+    end
+    
+    isSending = false
+end)
+
+print("Money Logger Loaded! Waiting for changes...")
