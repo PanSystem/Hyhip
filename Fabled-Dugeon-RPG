@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
+local UserInputService = game:GetService("UserInputService") -- เพิ่ม Service
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -27,7 +28,6 @@ local STATE = {
     CurrentConfigName = "Default",
 }
 
--- [แก้ไข] ใช้ SkillCooldown ตัวเดียวคุมทั้งหมด
 local CFG = {
     AttackDist = 12,
     MoveSpeed = 60,
@@ -36,7 +36,7 @@ local CFG = {
     RetryInterval = 0.5,
     SafeSpotRadius = 12,
     
-    SkillCooldown = 1.0, -- ใช้ตัวเดียว (0.1 - 5)
+    SkillCooldown = 1.0, -- Global Delay (0.1 - 5)
     
     VerticalEscapeHeight = 40,
     AngleCheckCount = 8,
@@ -44,7 +44,7 @@ local CFG = {
     DangerKeywords = {"hitbox", "damage", "area", "burn", "lava", "cone", "skill", "atk", "projectile", "bullet", "poison", "trap", "explosion", "fire", "hazard"},
 }
 
--- [แก้ไข] Presets กลับมาใช้ SkillCooldown
+-- CONFIG PRESETS
 local CONFIG_PRESETS = {
     Default = {
         AttackDist = 12, MoveSpeed = 60, PanicSpeed = 100, SearchRange = 1500,
@@ -186,7 +186,6 @@ local function RemoveBodyMovers()
     if BodyGyro then BodyGyro:Destroy() BodyGyro = nil end
 end
 
--- Character Respawn Handler
 lplr.CharacterAdded:Connect(function(char)
     print("🔄 Character Respawned!")
     STATS.Respawns = STATS.Respawns + 1
@@ -199,7 +198,6 @@ lplr.CharacterAdded:Connect(function(char)
     end
 end)
 
--- Anti-AFK Handler
 lplr.Idled:Connect(function()
     if STATE.AntiAFKEnabled then
         VirtualUser:CaptureController()
@@ -245,7 +243,7 @@ local function UpdateEnemyCache()
 end
 
 -------------------------------------------------------------------------
--- HELPER FUNCTIONS
+-- HELPER FUNCTIONS (IMPROVED INPUT)
 -------------------------------------------------------------------------
 local function ClickButton(button)
     if not button or not button.Visible then return false end
@@ -263,10 +261,31 @@ local function ClickButton(button)
     return true
 end
 
+-- [UPDATED] Robust Key Press Function
 local function PressKey(key)
-    VirtualInputManager:SendKeyEvent(true, key, false, game)
-    task.wait(0.05)
-    VirtualInputManager:SendKeyEvent(false, key, false, game)
+    task.spawn(function()
+        -- 1. Check Chat Focus (Don't press if typing)
+        if UserInputService:GetFocusedTextBox() then return end
+        
+        -- 2. Try VirtualInputManager (Standard method)
+        local success, _ = pcall(function()
+            VirtualInputManager:SendKeyEvent(true, key, false, game)
+            task.wait(0.15) -- Increased hold duration
+            VirtualInputManager:SendKeyEvent(false, key, false, game)
+        end)
+        
+        -- 3. Fallback to keypress (Legacy executors) if needed
+        if not success then
+            pcall(function()
+                if keypress and keyrelease then
+                    local keyCodeValue = key.Value
+                    keypress(keyCodeValue)
+                    task.wait(0.15)
+                    keyrelease(keyCodeValue)
+                end
+            end)
+        end
+    end)
 end
 
 local function AttemptAttack()
@@ -274,9 +293,12 @@ local function AttemptAttack()
     if SwingRemote then 
         pcall(function() SwingRemote:FireServer() end)
     end
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-    task.wait(0.05)
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    -- Use VirtualInputManager for Attack too
+    task.spawn(function()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    end)
 end
 
 -------------------------------------------------------------------------
@@ -704,7 +726,7 @@ local function StartAutoFarm()
                     lastSwing = now
                 end
                 
-                -- [แก้ไข] ใช้ SkillCooldown อ้างอิงทั้งหมด
+                -- [UPDATED] Robust Skill Logic
                 if STATE.AutoSkillsEnabled and distance <= CFG.AttackDist + 5 then
                     if now - lastQ >= CFG.SkillCooldown then 
                         PressKey(Enum.KeyCode.Q) 
@@ -800,7 +822,7 @@ Window:EditOpenButton({
 })
 
 Window:Tag({
-    Title = "v1.2.0",
+    Title = "v1.3.0",
     Icon = "github",
     Color = Color3.fromHex("#30ff6a"),
     Radius = 6,
@@ -1011,7 +1033,6 @@ SettingTab:Slider({ Title = "Move Speed", Desc = "ความเร็วใน
 SettingTab:Slider({ Title = "Panic Speed", Desc = "ความเร็วเมื่ออยู่ในอันตราย", Flag = "PanicSpeed", Step = 5, Value = {Min = 50, Max = 200, Default = CFG.PanicSpeed}, Callback = function(v) CFG.PanicSpeed = v end })
 SettingTab:Slider({ Title = "Search Range", Desc = "ระยะค้นหาศัตรู", Flag = "SearchRange", Step = 50, Value = {Min = 500, Max = 3000, Default = CFG.SearchRange}, Callback = function(v) CFG.SearchRange = v end })
 
--- [แก้ไข] ใช้ Slider เดียวคุมทั้งหมด 0.1 - 5
 SettingTab:Slider({ 
     Title = "Global Skill Delay", 
     Desc = "ความเร็วในการกดสกิล (Q/E/R)", 
@@ -1182,4 +1203,4 @@ task.spawn(function()
 end)
 
 Window:SelectTab(GeneralTab)
-Window:Notify({Title = "Hyper Premium", Content = "✅ System Ready! v1.2.0 (Global Delay)", Duration = 4})
+Window:Notify({Title = "Hyper Premium", Content = "✅ System Ready! v1.3.0 (Input Fix)", Duration = 4})
