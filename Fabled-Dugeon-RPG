@@ -1,9 +1,11 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser") -- เพิ่มสำหรับ Anti-AFK
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService") -- เพิ่มสำหรับ Server Hop
 
 local lplr = Players.LocalPlayer
 
@@ -17,12 +19,15 @@ local STATE = {
     AutoSkillsEnabled = true,
     AutoSaveEnabled = false,
     AutoLoadConfig = false,
+    AntiAFKEnabled = true, -- เพิ่ม
+    AutoLootEnabled = false, -- เพิ่ม
     IsRunning = true,
     SelectedDungeon = "Normal Dungeon",
     SelectedMap = "",
     CurrentConfigName = "Default",
 }
 
+-- ปรับปรุง CFG แยก Delay สกิล
 local CFG = {
     AttackDist = 12,
     MoveSpeed = 60,
@@ -30,30 +35,40 @@ local CFG = {
     SearchRange = 1500,
     RetryInterval = 0.5,
     SafeSpotRadius = 12,
-    SkillCooldown = 1.0,
+    
+    -- แยก Delay รายสกิล
+    DelayQ = 1.0,
+    DelayE = 3.0,
+    DelayR = 5.0,
+    -------------------
+    
     VerticalEscapeHeight = 40,
     AngleCheckCount = 8,
     EscapeAsLastResort = true,
     DangerKeywords = {"hitbox", "damage", "area", "burn", "lava", "cone", "skill", "atk", "projectile", "bullet", "poison", "trap", "explosion", "fire", "hazard"},
 }
 
--- Config Presets
+-- Config Presets (อัปเดตให้รองรับ Delay แยก)
 local CONFIG_PRESETS = {
     Default = {
         AttackDist = 12, MoveSpeed = 60, PanicSpeed = 100, SearchRange = 1500,
-        SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40, SkillCooldown = 1.0
+        SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40,
+        DelayQ = 1.0, DelayE = 3.0, DelayR = 5.0
     },
     Aggressive = {
         AttackDist = 10, MoveSpeed = 80, PanicSpeed = 120, SearchRange = 2000,
-        SafeSpotRadius = 10, AngleCheckCount = 8, VerticalEscapeHeight = 35, SkillCooldown = 0.8
+        SafeSpotRadius = 10, AngleCheckCount = 8, VerticalEscapeHeight = 35,
+        DelayQ = 0.5, DelayE = 2.0, DelayR = 4.0
     },
     Safe = {
         AttackDist = 15, MoveSpeed = 50, PanicSpeed = 90, SearchRange = 1200,
-        SafeSpotRadius = 15, AngleCheckCount = 12, VerticalEscapeHeight = 50, SkillCooldown = 1.2
+        SafeSpotRadius = 15, AngleCheckCount = 12, VerticalEscapeHeight = 50,
+        DelayQ = 1.5, DelayE = 4.0, DelayR = 6.0
     },
     Speed = {
         AttackDist = 12, MoveSpeed = 100, PanicSpeed = 150, SearchRange = 2500,
-        SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40, SkillCooldown = 0.6
+        SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40,
+        DelayQ = 0.8, DelayE = 2.5, DelayR = 4.5
     },
 }
 
@@ -83,6 +98,7 @@ local function SaveConfig(name)
     for k,v in pairs(CFG) do data[k] = v end
     data.AutoLoadConfig = STATE.AutoLoadConfig
     data.AutoSkillsEnabled = STATE.AutoSkillsEnabled
+    data.AntiAFKEnabled = STATE.AntiAFKEnabled -- Save AntiAFK state
     writefile(file, HttpService:JSONEncode(data))
     print("✅ Config Saved: " .. name)
     return true
@@ -99,6 +115,7 @@ local function LoadConfig(name)
             end
             if decoded.AutoLoadConfig ~= nil then STATE.AutoLoadConfig = decoded.AutoLoadConfig end
             if decoded.AutoSkillsEnabled ~= nil then STATE.AutoSkillsEnabled = decoded.AutoSkillsEnabled end
+            if decoded.AntiAFKEnabled ~= nil then STATE.AntiAFKEnabled = decoded.AntiAFKEnabled end
             print("✅ Config Loaded: " .. name)
             return true
         end
@@ -183,6 +200,15 @@ lplr.CharacterAdded:Connect(function(char)
         print("🟢 Restarting Auto Farm...")
         task.wait(1)
         if CachedRoot then CreateBodyMovers() end
+    end
+end)
+
+-- Anti-AFK Handler
+lplr.Idled:Connect(function()
+    if STATE.AntiAFKEnabled then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+        print("🚫 Anti-AFK: Prevented Kick")
     end
 end)
 
@@ -682,16 +708,17 @@ local function StartAutoFarm()
                     lastSwing = now
                 end
                 
+                -- UPDATED SKILL LOGIC (Separate Delays)
                 if STATE.AutoSkillsEnabled and distance <= CFG.AttackDist + 5 then
-                    if now - lastQ >= CFG.SkillCooldown then 
+                    if now - lastQ >= CFG.DelayQ then 
                         PressKey(Enum.KeyCode.Q) 
                         lastQ = now 
                     end
-                    if now - lastE >= CFG.SkillCooldown + 0.5 then 
+                    if now - lastE >= CFG.DelayE then 
                         PressKey(Enum.KeyCode.E) 
                         lastE = now 
                     end
-                    if now - lastR >= CFG.SkillCooldown + 1.0 then 
+                    if now - lastR >= CFG.DelayR then 
                         PressKey(Enum.KeyCode.R) 
                         lastR = now 
                     end
@@ -725,6 +752,28 @@ local function StopAutoFarm()
     print("🔴 Auto Farm STOPPED")
 end
 
+-- AUTO LOOT LOGIC
+task.spawn(function()
+    while true do
+        if STATE.AutoLootEnabled and CachedRoot then
+            pcall(function()
+                for _, prompt in ipairs(Workspace:GetDescendants()) do
+                    if prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                        local part = prompt.Parent
+                        if part and part:IsA("BasePart") then
+                            local dist = (CachedRoot.Position - part.Position).Magnitude
+                            if dist <= prompt.MaxActivationDistance + 5 then
+                                fireproximityprompt(prompt)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+        task.wait(0.5)
+    end
+end)
+
 -------------------------------------------------------------------------
 -- UI SETUP
 -------------------------------------------------------------------------
@@ -755,7 +804,7 @@ Window:EditOpenButton({
 })
 
 Window:Tag({
-    Title = "v1.0.0",
+    Title = "v1.1.0",
     Icon = "github",
     Color = Color3.fromHex("#30ff6a"),
     Radius = 6,
@@ -764,6 +813,7 @@ Window:Tag({
 local GeneralTab = Window:Tab({ Title = "General", Icon = "home" })
 local ConfigTab = Window:Tab({ Title = "Config", Icon = "save" })
 local SettingTab = Window:Tab({ Title = "Setting", Icon = "settings" })
+local MiscTab = Window:Tab({ Title = "Misc", Icon = "wrench" }) -- New Tab
 local DebugTab = Window:Tab({ Title = "Debug", Icon = "bug" })
 
 -------------------------------------------------------------------------
@@ -878,7 +928,7 @@ DungeonSec:Button({
 })
 
 -------------------------------------------------------------------------
--- CONFIG TAB - แก้ไขให้โหลดครบทุกอัน
+-- CONFIG TAB
 -------------------------------------------------------------------------
 ConfigTab:Section({ Title = "⚙️ Config Presets" })
 
@@ -896,26 +946,10 @@ ConfigTab:Dropdown({
 })
 
 ConfigTab:Section({ Title = "📊 Preset Details" })
-
-ConfigTab:Paragraph({ 
-    Title = "Default Preset", 
-    Desc = "⚖️ Balanced - ความเร็วปานกลาง ปลอดภัยดี\n• Attack: 12 | Speed: 60 | Safe Radius: 12"
-})
-
-ConfigTab:Paragraph({ 
-    Title = "Aggressive Preset", 
-    Desc = "⚔️ Fast & Risky - เร็ว ใกล้ มีความเสี่ยง\n• Attack: 10 | Speed: 80 | Safe Radius: 10"
-})
-
-ConfigTab:Paragraph({ 
-    Title = "Safe Preset", 
-    Desc = "🛡️ Maximum Safety - ช้า ไกล ปลอดภัยสูง\n• Attack: 15 | Speed: 50 | Safe Radius: 15"
-})
-
-ConfigTab:Paragraph({ 
-    Title = "Speed Preset", 
-    Desc = "⚡ Ultra Fast - เร็วมาก ฟาร์มเร็ว\n• Attack: 12 | Speed: 100 | Safe Radius: 12"
-})
+ConfigTab:Paragraph({ Title = "Default Preset", Desc = "⚖️ Balanced\n• Attack: 12 | Speed: 60 | Safe Radius: 12" })
+ConfigTab:Paragraph({ Title = "Aggressive Preset", Desc = "⚔️ Fast & Risky\n• Attack: 10 | Speed: 80 | Safe Radius: 10" })
+ConfigTab:Paragraph({ Title = "Safe Preset", Desc = "🛡️ Maximum Safety\n• Attack: 15 | Speed: 50 | Safe Radius: 15" })
+ConfigTab:Paragraph({ Title = "Speed Preset", Desc = "⚡ Ultra Fast\n• Attack: 12 | Speed: 100 | Safe Radius: 12" })
 
 ConfigTab:Section({ Title = "💾 Save/Load System" })
 
@@ -968,344 +1002,62 @@ ConfigTab:Button({
 })
 
 ConfigTab:Section({ Title = "⚙️ Auto Features" })
-
-ConfigTab:Toggle({ 
-    Title = "Auto Load Config", 
-    Desc = "โหลด AutoSave เมื่อเปิดสคริปต์", 
-    Flag = "AutoLoadConfig", 
-    Value = false, 
-    Callback = function(v) STATE.AutoLoadConfig = v end 
-})
-
-ConfigTab:Toggle({ 
-    Title = "Auto Save (10s)", 
-    Desc = "บันทึกอัตโนมัติทุก 10 วินาที",
-    Flag = "AutoSave",
-    Value = false, 
-    Callback = function(v) STATE.AutoSaveEnabled = v end 
-})
-
-ConfigTab:Section({ Title = "📈 Current Settings" })
-
-ConfigTab:Paragraph({
-    Title = "Active Config",
-    Desc = "Config: " .. STATE.CurrentConfigName .. "\nAttack: " .. CFG.AttackDist .. " | Speed: " .. CFG.MoveSpeed
-})
+ConfigTab:Toggle({ Title = "Auto Load Config", Desc = "โหลด AutoSave เมื่อเปิดสคริปต์", Flag = "AutoLoadConfig", Value = false, Callback = function(v) STATE.AutoLoadConfig = v end })
+ConfigTab:Toggle({ Title = "Auto Save (10s)", Desc = "บันทึกอัตโนมัติทุก 10 วินาที", Flag = "AutoSave", Value = false, Callback = function(v) STATE.AutoSaveEnabled = v end })
 
 -------------------------------------------------------------------------
 -- SETTING TAB
 -------------------------------------------------------------------------
 SettingTab:Section({ Title = "⚔️ Combat Settings" })
 
-SettingTab:Slider({ 
-    Title = "Attack Distance", 
-    Desc = "ระยะโจมตีศัตรู",
-    Flag = "AttackDist",
-    Step = 1,
-    Value = {Min = 6, Max = 25, Default = CFG.AttackDist},
-    Callback = function(v) CFG.AttackDist = v end 
-})
+SettingTab:Slider({ Title = "Attack Distance", Desc = "ระยะโจมตีศัตรู", Flag = "AttackDist", Step = 1, Value = {Min = 6, Max = 25, Default = CFG.AttackDist}, Callback = function(v) CFG.AttackDist = v end })
+SettingTab:Slider({ Title = "Move Speed", Desc = "ความเร็วในการเคลื่อนที่", Flag = "MoveSpeed", Step = 5, Value = {Min = 30, Max = 150, Default = CFG.MoveSpeed}, Callback = function(v) CFG.MoveSpeed = v end })
+SettingTab:Slider({ Title = "Panic Speed", Desc = "ความเร็วเมื่ออยู่ในอันตราย", Flag = "PanicSpeed", Step = 5, Value = {Min = 50, Max = 200, Default = CFG.PanicSpeed}, Callback = function(v) CFG.PanicSpeed = v end })
+SettingTab:Slider({ Title = "Search Range", Desc = "ระยะค้นหาศัตรู", Flag = "SearchRange", Step = 50, Value = {Min = 500, Max = 3000, Default = CFG.SearchRange}, Callback = function(v) CFG.SearchRange = v end })
 
-SettingTab:Slider({ 
-    Title = "Move Speed", 
-    Desc = "ความเร็วในการเคลื่อนที่",
-    Flag = "MoveSpeed",
-    Step = 5,
-    Value = {Min = 30, Max = 150, Default = CFG.MoveSpeed},
-    Callback = function(v) CFG.MoveSpeed = v end 
-})
-
-SettingTab:Slider({ 
-    Title = "Panic Speed", 
-    Desc = "ความเร็วเมื่ออยู่ในอันตราย",
-    Flag = "PanicSpeed",
-    Step = 5,
-    Value = {Min = 50, Max = 200, Default = CFG.PanicSpeed},
-    Callback = function(v) CFG.PanicSpeed = v end 
-})
-
-SettingTab:Slider({ 
-    Title = "Search Range", 
-    Desc = "ระยะค้นหาศัตรู",
-    Flag = "SearchRange",
-    Step = 50,
-    Value = {Min = 500, Max = 3000, Default = CFG.SearchRange},
-    Callback = function(v) CFG.SearchRange = v end 
-})
-
-SettingTab:Slider({ 
-    Title = "Skill Cooldown", 
-    Desc = "เวลารอระหว่างสกิล",
-    Flag = "SkillCooldown",
-    Step = 0.1,
-    Value = {Min = 0.5, Max = 3, Default = CFG.SkillCooldown},
-    Callback = function(v) CFG.SkillCooldown = v end 
-})
+-- UPDATED SKILL SLIDERS
+SettingTab:Section({ Title = "🕒 Skill Cooldowns (Seconds)" })
+SettingTab:Slider({ Title = "Skill Q Delay", Desc = "เว้นระยะการกด Q (วินาที)", Flag = "DelayQ", Step = 0.1, Value = {Min = 0.1, Max = 10, Default = CFG.DelayQ}, Callback = function(v) CFG.DelayQ = v end })
+SettingTab:Slider({ Title = "Skill E Delay", Desc = "เว้นระยะการกด E (วินาที)", Flag = "DelayE", Step = 0.1, Value = {Min = 0.1, Max = 10, Default = CFG.DelayE}, Callback = function(v) CFG.DelayE = v end })
+SettingTab:Slider({ Title = "Skill R Delay", Desc = "เว้นระยะการกด R (วินาที)", Flag = "DelayR", Step = 0.1, Value = {Min = 0.1, Max = 20, Default = CFG.DelayR}, Callback = function(v) CFG.DelayR = v end })
 
 SettingTab:Section({ Title = "🛡️ Evasion Settings" })
-
-SettingTab:Slider({ 
-    Title = "Safe Spot Radius", 
-    Desc = "รัศมีในการหาจุดปลอดภัย",
-    Flag = "SafeSpotRadius",
-    Step = 1,
-    Value = {Min = 8, Max = 20, Default = CFG.SafeSpotRadius},
-    Callback = function(v) CFG.SafeSpotRadius = v end 
-})
-
-SettingTab:Slider({ 
-    Title = "Angle Check Count", 
-    Desc = "จำนวนมุมที่เช็ค",
-    Flag = "AngleCheckCount",
-    Step = 2,
-    Value = {Min = 4, Max = 16, Default = CFG.AngleCheckCount},
-    Callback = function(v) CFG.AngleCheckCount = v end 
-})
-
-SettingTab:Slider({ 
-    Title = "Vertical Escape Height", 
-    Desc = "ความสูงในการหลบ",
-    Flag = "VerticalEscape",
-    Step = 5,
-    Value = {Min = 20, Max = 100, Default = CFG.VerticalEscapeHeight},
-    Callback = function(v) CFG.VerticalEscapeHeight = v end 
-})
-
-SettingTab:Toggle({ 
-    Title = "Escape as Last Resort", 
-    Desc = "หลบขึ้นบนเมื่อหาจุดไม่เจอ",
-    Flag = "EscapeLastResort", 
-    Value = true, 
-    Callback = function(v) CFG.EscapeAsLastResort = v end 
-})
+SettingTab:Slider({ Title = "Safe Spot Radius", Desc = "รัศมีในการหาจุดปลอดภัย", Flag = "SafeSpotRadius", Step = 1, Value = {Min = 8, Max = 20, Default = CFG.SafeSpotRadius}, Callback = function(v) CFG.SafeSpotRadius = v end })
+SettingTab:Slider({ Title = "Angle Check Count", Desc = "จำนวนมุมที่เช็ค", Flag = "AngleCheckCount", Step = 2, Value = {Min = 4, Max = 16, Default = CFG.AngleCheckCount}, Callback = function(v) CFG.AngleCheckCount = v end })
+SettingTab:Slider({ Title = "Vertical Escape Height", Desc = "ความสูงในการหลบ", Flag = "VerticalEscape", Step = 5, Value = {Min = 20, Max = 100, Default = CFG.VerticalEscapeHeight}, Callback = function(v) CFG.VerticalEscapeHeight = v end })
+SettingTab:Toggle({ Title = "Escape as Last Resort", Desc = "หลบขึ้นบนเมื่อหาจุดไม่เจอ", Flag = "EscapeLastResort", Value = true, Callback = function(v) CFG.EscapeAsLastResort = v end })
 
 SettingTab:Section({ Title = "🔧 Other Settings" })
-
-SettingTab:Slider({ 
-    Title = "Retry Interval", 
-    Desc = "เวลาระหว่างการกด Retry",
-    Flag = "RetryInterval",
-    Step = 0.1,
-    Value = {Min = 0.3, Max = 3, Default = CFG.RetryInterval},
-    Callback = function(v) CFG.RetryInterval = v end 
-})
-
-SettingTab:Button({ 
-    Title = "🗑️ Clear Cache", 
-    Desc = "ล้างแคชทั้งหมด",
-    Callback = function()
-        table.clear(EnemyCache)
-        table.clear(DangerCache)
-        Window:Notify({Title = "Cache", Content = "✅ ล้างแคชแล้ว!", Duration = 3})
-    end 
-})
+SettingTab:Slider({ Title = "Retry Interval", Desc = "เวลาระหว่างการกด Retry", Flag = "RetryInterval", Step = 0.1, Value = {Min = 0.3, Max = 3, Default = CFG.RetryInterval}, Callback = function(v) CFG.RetryInterval = v end })
+SettingTab:Button({ Title = "🗑️ Clear Cache", Desc = "ล้างแคชทั้งหมด", Callback = function() table.clear(EnemyCache) table.clear(DangerCache) Window:Notify({Title = "Cache", Content = "✅ ล้างแคชแล้ว!", Duration = 3}) end })
 
 -------------------------------------------------------------------------
--- DEBUG TAB
+-- MISC TAB (Extension Added)
 -------------------------------------------------------------------------
-DebugTab:Section({ Title = "📊 Live Statistics" })
-
-local StatsText = "Loading..."
-local StatsLabel = DebugTab:Paragraph({
-    Title = "Real-time Stats",
-    Desc = StatsText,
-})
-
--- Update Stats
-task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            local status = STATS.FarmActive and "🟢 ACTIVE" or "🔴 IDLE"
-            local newText = string.format(
-                "%s | %s | %s\n" ..
-                "━━━━━━━━━━━━━━━━━━━━━━\n" ..
-                "👾 Enemies: %d | ⚔️ Attacks: %d\n" ..
-                "⚠️ Dangers: %d | 🏃 Evasions: %d\n" ..
-                "✅ Safe Spots: %d | ⬆️ Escapes: %d\n" ..
-                "🔄 Respawns: %d\n" ..
-                "🎯 Target: %s",
-                status,
-                STATE.CurrentConfigName,
-                STATS.Status,
-                STATS.EnemiesFound,
-                STATS.AttacksFired,
-                STATS.DangersDetected,
-                STATS.EvasionAttempts,
-                STATS.SafeSpotsFound,
-                STATS.VerticalEscapes,
-                STATS.Respawns,
-                STATS.LastTarget
-            )
-            
-            if StatsText ~= newText then
-                StatsText = newText
-                -- Try to update if method exists
-                pcall(function()
-                    if StatsLabel.Set then
-                        StatsLabel:Set({ Desc = newText })
-                    end
-                end)
-            end
-        end)
-    end
-end)
-
-DebugTab:Section({ Title = "🔬 Testing Tools" })
-
-DebugTab:Button({ 
-    Title = "🔍 Test Enemy Detection", 
-    Desc = "ตรวจหาศัตรู",
-    Callback = function()
-        UpdateEnemyCache()
-        Window:Notify({Title = "Debug", Content = "Found " .. #EnemyCache .. " enemies!", Duration = 3})
-    end 
-})
-
-DebugTab:Button({ 
-    Title = "⚠️ Test Danger Detection", 
-    Desc = "ตรวจสอบอันตราย",
-    Callback = function()
-        local inDanger = AmIInDanger()
-        Window:Notify({Title = "Debug", Content = inDanger and "⚠️ IN DANGER!" or "✅ Safe", Duration = 3})
-    end 
-})
-
-DebugTab:Button({ 
-    Title = "🔄 Reset Stats", 
-    Desc = "รีเซ็ตสถิติ",
-    Callback = function()
-        STATS.AttacksFired = 0
-        STATS.DangersDetected = 0
-        STATS.EvasionAttempts = 0
-        STATS.SafeSpotsFound = 0
-        STATS.VerticalEscapes = 0
-        Window:Notify({Title = "Debug", Content = "✅ Stats Reset!", Duration = 3})
-    end 
-})
-
-DebugTab:Button({ 
-    Title = "🔄 Force Refresh Character", 
-    Desc = "รีเฟรชตัวละคร",
-    Callback = function()
-        UpdateCharacterCache()
-        Window:Notify({Title = "Debug", Content = "✅ Character Refreshed!", Duration = 3})
-    end 
-})
-
-DebugTab:Button({ 
-    Title = "🛑 Emergency Stop All", 
-    Desc = "หยุดทุกอย่างทันที",
-    Callback = function()
-        StopAutoFarm()
-        STATE.AutoDungeonEnabled = false
-        STATE.AutoRetryEnabled = false
-        STATE.AutoFarmEnabled = false
-        Window:Notify({Title = "Debug", Content = "🛑 All Stopped!", Duration = 3})
-    end 
-})
-
--------------------------------------------------------------------------
--- AUTO SAVE LOOP
--------------------------------------------------------------------------
-task.spawn(function()
-    local timer = 0
-    while task.wait(1) do
-        if STATE.AutoSaveEnabled then
-            timer = timer + 1
-            if timer >= 10 then
-                SaveConfig("AutoSave")
-                timer = 0
-            end
-        end
-    end
-end)
-
--------------------------------------------------------------------------
--- AUTO LOAD STARTUP
--------------------------------------------------------------------------
-task.spawn(function()
-    task.wait(1.5)
-    local path = ConfigFolder .. "/AutoSave.json"
-    if isfile(path) then
-        local content = readfile(path)
-        local s, d = pcall(function() return HttpService:JSONDecode(content) end)
-        if s and d and d.AutoLoadConfig then
-            LoadConfig("AutoSave")
-            Window:Notify({Title="AutoLoad", Content="✅ Config Loaded", Duration=3})
-        end
-    end
-end)
-
-Window:SelectTab(GeneralTab)
--------------------------------------------------------------------------
--- EXTENSION: MISC & UTILITY (เพิ่มแท็บเสริม)
--------------------------------------------------------------------------
-local MiscTab = Window:Tab({ Title = "Misc", Icon = "wrench" })
 local UtilitySec = MiscTab:Section({ Title = "🛠️ Utilities" })
-
--- 1. Anti-AFK System (กันหลุด)
-local VirtualUser = game:GetService("VirtualUser")
-STATE.AntiAFKEnabled = true -- Default True
 
 UtilitySec:Toggle({
     Title = "Anti-AFK",
-    Desc = "ป้องกันการถูกเตะออกจากเซิร์ฟเวอร์ (20 นาที)",
+    Desc = "ป้องกันการถูกเตะออกจากเซิร์ฟเวอร์",
     Flag = "AntiAFK",
     Value = true,
-    Callback = function(v) 
-        STATE.AntiAFKEnabled = v 
-    end
+    Callback = function(v) STATE.AntiAFKEnabled = v end
 })
-
-lplr.Idled:Connect(function()
-    if STATE.AntiAFKEnabled then
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new())
-        print("🚫 Anti-AFK: Prevented Kick")
-    end
-end)
-
--- 2. Auto Loot System (เก็บของ/เปิดหีบ)
-STATE.AutoLootEnabled = false
 
 UtilitySec:Toggle({
     Title = "Auto Loot / Interact",
-    Desc = "กดปุ่ม E (ProximityPrompt) อัตโนมัติ (เช่น หีบสมบัติ)",
+    Desc = "กดปุ่ม E (ProximityPrompt) อัตโนมัติ",
     Flag = "AutoLoot",
     Value = false,
-    Callback = function(v)
-        STATE.AutoLootEnabled = v
-        if v then
-            task.spawn(function()
-                while STATE.AutoLootEnabled do
-                    pcall(function()
-                        -- ค้นหา Prompt ในระยะใกล้
-                        if CachedRoot then
-                            for _, prompt in ipairs(Workspace:GetDescendants()) do
-                                if prompt:IsA("ProximityPrompt") and prompt.Enabled then
-                                    local part = prompt.Parent
-                                    if part and part:IsA("BasePart") then
-                                        local dist = (CachedRoot.Position - part.Position).Magnitude
-                                        if dist <= prompt.MaxActivationDistance + 5 then
-                                            fireproximityprompt(prompt)
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end)
-                    task.wait(0.5)
-                end
-            end)
-            Window:Notify({Title = "Auto Loot", Content = "🟢 Enabled", Duration = 3})
-        end
+    Callback = function(v) 
+        STATE.AutoLootEnabled = v 
+        if v then Window:Notify({Title = "Auto Loot", Content = "🟢 Enabled", Duration = 3}) end
     end
 })
 
--- 3. FPS Boost (ลดแลค)
 UtilitySec:Button({
     Title = "🚀 FPS Boost",
-    Desc = "ลบ Texture เพื่อลดอาการแลค",
+    Desc = "ลบ Texture เพื่อลดแลค",
     Callback = function()
         pcall(function()
             local decals = 0
@@ -1320,12 +1072,11 @@ UtilitySec:Button({
     end
 })
 
--- 4. Server Hop (ย้ายเซิร์ฟ)
 UtilitySec:Button({
     Title = "🌎 Server Hop",
-    Desc = "ย้ายไปเซิร์ฟเวอร์อื่น (เซิร์ฟน้อย)",
+    Desc = "ย้ายไปเซิร์ฟเวอร์อื่น",
     Callback = function()
-        Window:Notify({Title = "Server Hop", Content = "⏳ Searching for server...", Duration = 3})
+        Window:Notify({Title = "Server Hop", Content = "⏳ Searching...", Duration = 3})
         task.spawn(function()
             local PlaceID = game.PlaceId
             local AllIDs = {}
@@ -1341,7 +1092,7 @@ UtilitySec:Button({
                         end
                     end)
                     if #AllIDs > 0 then
-                        game:GetService("TeleportService"):TeleportToPlaceInstance(PlaceID, AllIDs[math.random(1, #AllIDs)], lplr)
+                        TeleportService:TeleportToPlaceInstance(PlaceID, AllIDs[math.random(1, #AllIDs)], lplr)
                         found = true
                     end
                     if found then break end
@@ -1352,28 +1103,83 @@ UtilitySec:Button({
     end
 })
 
--- 5. White Screen (ประหยัด GPU)
 UtilitySec:Toggle({
     Title = "White Screen",
-    Desc = "หน้าจอขาวเพื่อลดการใช้ทรัพยากรเครื่อง",
+    Desc = "ประหยัด GPU",
     Value = false,
     Callback = function(v)
-        if v then
-            RunService:Set3dRenderingEnabled(false)
-        else
-            RunService:Set3dRenderingEnabled(true)
-        end
+        RunService:Set3dRenderingEnabled(not v)
     end
 })
 
 -------------------------------------------------------------------------
--- END OF SCRIPT & NOTIFICATION
+-- DEBUG TAB
 -------------------------------------------------------------------------
--- แจ้งเตือนอัปเดตสถานะ
-task.delay(1, function()
-    Window:Notify({
-        Title = "Hyper Premium", 
-        Content = "✅ Loaded Extension (Misc & Utility)", 
-        Duration = 5
-    })
+DebugTab:Section({ Title = "📊 Live Statistics" })
+
+local StatsText = "Loading..."
+local StatsLabel = DebugTab:Paragraph({ Title = "Real-time Stats", Desc = StatsText })
+
+task.spawn(function()
+    while task.wait(1) do
+        pcall(function()
+            local status = STATS.FarmActive and "🟢 ACTIVE" or "🔴 IDLE"
+            local newText = string.format(
+                "%s | %s | %s\n" ..
+                "━━━━━━━━━━━━━━━━━━━━━━\n" ..
+                "👾 Enemies: %d | ⚔️ Attacks: %d\n" ..
+                "⚠️ Dangers: %d | 🏃 Evasions: %d\n" ..
+                "✅ Safe Spots: %d | ⬆️ Escapes: %d\n" ..
+                "🔄 Respawns: %d\n" ..
+                "🎯 Target: %s",
+                status, STATE.CurrentConfigName, STATS.Status,
+                STATS.EnemiesFound, STATS.AttacksFired, STATS.DangersDetected,
+                STATS.EvasionAttempts, STATS.SafeSpotsFound, STATS.VerticalEscapes,
+                STATS.Respawns, STATS.LastTarget
+            )
+            if StatsText ~= newText then
+                StatsText = newText
+                if StatsLabel.Set then StatsLabel:Set({ Desc = newText }) end
+            end
+        end)
+    end
 end)
+
+DebugTab:Section({ Title = "🔬 Testing Tools" })
+DebugTab:Button({ Title = "🔍 Test Enemy Detection", Callback = function() UpdateEnemyCache() Window:Notify({Title = "Debug", Content = "Found " .. #EnemyCache .. " enemies!", Duration = 3}) end })
+DebugTab:Button({ Title = "⚠️ Test Danger Detection", Callback = function() local inDanger = AmIInDanger() Window:Notify({Title = "Debug", Content = inDanger and "⚠️ IN DANGER!" or "✅ Safe", Duration = 3}) end })
+DebugTab:Button({ Title = "🔄 Reset Stats", Callback = function() STATS.AttacksFired = 0 STATS.DangersDetected = 0 STATS.EvasionAttempts = 0 STATS.SafeSpotsFound = 0 STATS.VerticalEscapes = 0 Window:Notify({Title = "Debug", Content = "✅ Stats Reset!", Duration = 3}) end })
+DebugTab:Button({ Title = "🔄 Force Refresh Character", Callback = function() UpdateCharacterCache() Window:Notify({Title = "Debug", Content = "✅ Character Refreshed!", Duration = 3}) end })
+DebugTab:Button({ Title = "🛑 Emergency Stop All", Callback = function() StopAutoFarm() STATE.AutoDungeonEnabled = false STATE.AutoRetryEnabled = false STATE.AutoFarmEnabled = false Window:Notify({Title = "Debug", Content = "🛑 All Stopped!", Duration = 3}) end })
+
+-------------------------------------------------------------------------
+-- AUTO SAVE & STARTUP
+-------------------------------------------------------------------------
+task.spawn(function()
+    local timer = 0
+    while task.wait(1) do
+        if STATE.AutoSaveEnabled then
+            timer = timer + 1
+            if timer >= 10 then
+                SaveConfig("AutoSave")
+                timer = 0
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    task.wait(1.5)
+    local path = ConfigFolder .. "/AutoSave.json"
+    if isfile(path) then
+        local content = readfile(path)
+        local s, d = pcall(function() return HttpService:JSONDecode(content) end)
+        if s and d and d.AutoLoadConfig then
+            LoadConfig("AutoSave")
+            Window:Notify({Title="AutoLoad", Content="✅ Config Loaded", Duration=3})
+        end
+    end
+end)
+
+Window:SelectTab(GeneralTab)
+Window:Notify({Title = "Hyper Premium", Content = "✅ System Ready! v1.1.0 (Full)", Duration = 4})
