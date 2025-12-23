@@ -3,77 +3,20 @@ local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 
 local lplr = Players.LocalPlayer
 
--- Load WindUI
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
--- Create Window
-local Window = WindUI:CreateWindow({
-    Title = "Hyper",
-    Icon = nil,
-    Author = "Premium",
-    Folder = "Hyper_premium",
-    Size = UDim2.fromOffset(600, 400),
-    MinSize = Vector2.new(600, 400),
-    MaxSize = Vector2.new(850, 560),
-    Transparent = true,
-    Theme = "Dark",
-    Resizable = true,
-    SideBarWidth = 200,
-    BackgroundImageTransparency = 0.42,
-    HideSearchBar = true,
-    ScrollBarEnabled = false,
-    User = {
-        Enabled = true,
-        Anonymous = true,
-        Callback = function() print("User clicked") end,
-    },
-})
-
-Window:EditOpenButton({
-    Title = "Hyper HUB",
-    Icon = "",
-    CornerRadius = UDim.new(0,6),
-    StrokeThickness = 1,
-    Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
-        Color3.fromHex("F89B29")
-    ),
-    OnlyMobile = false,
-    Enabled = true,
-    Draggable = true,
-})
-
--- Config Manager Setup
-local ConfigManager = Window.ConfigManager
-local MainConfig = ConfigManager:CreateConfig("HyperConfig")
-
--- Tabs
-local GeneralTab = Window:Tab({ Title = "General", Icon = nil })
-local ConfigTab = Window:Tab({ Title = "Config", Icon = nil })
-local SettingTab = Window:Tab({ Title = "Setting", Icon = nil })
-local DebugTab = Window:Tab({ Title = "Debug", Icon = nil })
-
--- Tag
-Window:Tag({
-    Title = "v0.2.1",
-    Icon = "github",
-    Color = Color3.fromHex("#30ff6a"),
-    Radius = 6,
-})
-
 -------------------------------------------------------------------------
--- STATE & CONFIG
+-- 1. STATE & VARIABLES
 -------------------------------------------------------------------------
 local STATE = {
     AutoDungeonEnabled = false,
     AutoFarmEnabled = false,
     AutoRetryEnabled = false,
-    SelectedDungeon = "Normal Dungeon",
-    SelectedMap = "",
-    CurrentConfigName = "Default",
+    AutoSkillsEnabled = true,
+    IsRunning = true,
+    AutoSaveEnabled = false,
 }
 
 local CFG = {
@@ -85,1197 +28,455 @@ local CFG = {
     VerticalEscapeHeight = 40,
     AngleCheckCount = 8,
     SafeSpotRadius = 12,
+    SkillCooldown = 1.5,
     EscapeAsLastResort = true,
     DangerKeywords = {"hitbox", "damage", "area", "burn", "lava", "cone", "skill", "atk", "projectile", "bullet", "poison", "trap", "explosion", "fire", "hazard"},
+    -- Config System Flag
+    AutoLoadConfig = false 
 }
 
--- Config Presets
-local CONFIG_PRESETS = {
-    Default = {
-        AttackDist = 12,
-        MoveSpeed = 60,
-        PanicSpeed = 100,
-        SearchRange = 1500,
-        SafeSpotRadius = 12,
-        AngleCheckCount = 8,
-        VerticalEscapeHeight = 40,
-    },
-    Aggressive = {
-        AttackDist = 10,
-        MoveSpeed = 80,
-        PanicSpeed = 120,
-        SearchRange = 2000,
-        SafeSpotRadius = 10,
-        AngleCheckCount = 8,
-        VerticalEscapeHeight = 35,
-    },
-    Safe = {
-        AttackDist = 15,
-        MoveSpeed = 50,
-        PanicSpeed = 90,
-        SearchRange = 1200,
-        SafeSpotRadius = 15,
-        AngleCheckCount = 12,
-        VerticalEscapeHeight = 50,
-    },
-    Speed = {
-        AttackDist = 12,
-        MoveSpeed = 100,
-        PanicSpeed = 150,
-        SearchRange = 2500,
-        SafeSpotRadius = 12,
-        AngleCheckCount = 8,
-        VerticalEscapeHeight = 40,
-    },
-}
-
-local function LoadConfigPreset(presetName)
-    local preset = CONFIG_PRESETS[presetName]
-    if not preset then return false end
-    
-    for key, value in pairs(preset) do
-        CFG[key] = value
-    end
-    
-    STATE.CurrentConfigName = presetName
-    print("✅ Loaded Config:", presetName)
-    return true
-end
-
--- Debug Stats
 local STATS = {
     EnemiesFound = 0,
     AttacksFired = 0,
+    SkillsUsed = 0,
     DangersDetected = 0,
-    EvasionAttempts = 0,
-    SafeSpotsFound = 0,
-    VerticalEscapes = 0,
-    Respawns = 0,
-    LastTarget = "None",
     FarmActive = false,
+    LastTarget = "None"
 }
 
+-- Config Folder Setup
+local ConfigFolder = "Hyper_premium"
+if not isfolder(ConfigFolder) then makefolder(ConfigFolder) end
+
 -------------------------------------------------------------------------
--- CHARACTER MANAGEMENT
+-- 2. CUSTOM CONFIG SYSTEM (FIXED ERROR)
 -------------------------------------------------------------------------
-local CachedChar = nil
-local CachedRoot = nil
-local CachedHum = nil
-local BodyVel = nil
-local BodyGyro = nil
+local function SaveConfig(name)
+    local file = ConfigFolder .. "/" .. name .. ".json"
+    -- รวม STATE ที่จำเป็นเข้าไปใน CFG ก่อนเซฟ
+    local data = {}
+    for k,v in pairs(CFG) do data[k] = v end
+    -- เพิ่มค่า Setting พิเศษ
+    data.AutoLoadConfig = STATE.AutoLoadConfig -- บันทึกสถานะ Toggle AutoLoad
+    
+    writefile(file, HttpService:JSONEncode(data))
+    print("✅ Saved Config: " .. name)
+end
+
+local function LoadConfig(name)
+    local file = ConfigFolder .. "/" .. name .. ".json"
+    if isfile(file) then
+        local content = readfile(file)
+        local success, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+        if success and decoded then
+            -- อัปเดตค่า CFG
+            for k, v in pairs(decoded) do
+                if CFG[k] ~= nil then CFG[k] = v end
+            end
+            -- อัปเดต State บางตัว
+            if decoded.AutoLoadConfig ~= nil then STATE.AutoLoadConfig = decoded.AutoLoadConfig end
+            print("✅ Loaded Config: " .. name)
+            return true
+        end
+    end
+    return false
+end
+
+local function GetConfigList()
+    local files = {}
+    local success, result = pcall(function() return listfiles(ConfigFolder) end)
+    if success then
+        for _, file in ipairs(result) do
+            -- ดึงแค่ชื่อไฟล์ ไม่เอา path (รองรับทั้ง exploit ใหม่และเก่า)
+            local name = file:match("([^/|\\]+)%.json$") or file:match("([^/|\\]+)$")
+            if name then table.insert(files, name) end
+        end
+    end
+    return files
+end
+
+-------------------------------------------------------------------------
+-- 3. HELPER FUNCTIONS
+-------------------------------------------------------------------------
+local CachedChar, CachedRoot, CachedHum
+local BodyVel, BodyGyro
 
 local function UpdateCharacterCache()
     CachedChar = lplr.Character
     if CachedChar then
         CachedRoot = CachedChar:FindFirstChild("HumanoidRootPart")
         CachedHum = CachedChar:FindFirstChild("Humanoid")
-        return true
+        return CachedRoot and CachedHum
     end
     return false
 end
 
+local function RemoveBodyMovers()
+    if BodyVel then BodyVel:Destroy() BodyVel = nil end
+    if BodyGyro then BodyGyro:Destroy() BodyGyro = nil end
+end
+
 local function CreateBodyMovers()
     if not CachedRoot then return end
-    
-    -- Remove old ones first
-    if BodyVel then BodyVel:Destroy() end
-    if BodyGyro then BodyGyro:Destroy() end
-    
+    RemoveBodyMovers()
     BodyVel = Instance.new("BodyVelocity")
-    BodyVel.MaxForce = Vector3.new(100000, 100000, 100000)
+    BodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
     BodyVel.Velocity = Vector3.zero
     BodyVel.Parent = CachedRoot
-    
     BodyGyro = Instance.new("BodyGyro")
-    BodyGyro.MaxTorque = Vector3.new(100000, 100000, 100000)
+    BodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
     BodyGyro.P = 5000
     BodyGyro.D = 500
     BodyGyro.Parent = CachedRoot
-    
-    print("✅ Body Movers Created")
-end
-
-local function RemoveBodyMovers()
-    if BodyVel then
-        BodyVel:Destroy()
-        BodyVel = nil
-    end
-    if BodyGyro then
-        BodyGyro:Destroy()
-        BodyGyro = nil
-    end
-end
-
--- Character Respawn Handler
-lplr.CharacterAdded:Connect(function(char)
-    print("🔄 Character Respawned!")
-    STATS.Respawns = STATS.Respawns + 1
-    
-    task.wait(1)
-    UpdateCharacterCache()
-    
-    if STATE.AutoFarmEnabled then
-        print("🟢 Restarting Auto Farm after respawn...")
-        task.wait(1)
-        if CachedRoot then
-            CreateBodyMovers()
-        end
-    end
-end)
-
--- Initial character setup
-task.wait(1)
-UpdateCharacterCache()
-
--------------------------------------------------------------------------
--- PERFORMANCE CACHE
--------------------------------------------------------------------------
-local EnemyCache = {}
-local DangerCache = {}
-local lastCacheUpdate = 0
-local CACHE_INTERVAL = 0.5
-
-local function UpdateEnemyCache()
-    local now = tick()
-    if now - lastCacheUpdate < CACHE_INTERVAL then return end
-    
-    table.clear(EnemyCache)
-    local enemies = Workspace:FindFirstChild("Enemies")
-    if enemies then
-        for _, enemy in ipairs(enemies:GetChildren()) do
-            if enemy:IsA("Model") then
-                local hum = enemy:FindFirstChild("Humanoid")
-                local root = enemy:FindFirstChild("HumanoidRootPart")
-                if hum and root and hum.Health > 0 then
-                    table.insert(EnemyCache, {
-                        Enemy = enemy,
-                        Root = root,
-                        Position = root.Position,
-                    })
-                end
-            end
-        end
-    end
-    lastCacheUpdate = now
-    STATS.EnemiesFound = #EnemyCache
-end
-
--------------------------------------------------------------------------
--- AUTO RETRY SYSTEM
--------------------------------------------------------------------------
-local lastRetryClick = 0
-local retryThread = nil
-
-local function RunAutoRetry()
-    while STATE.AutoRetryEnabled do
-        local now = tick()
-        
-        if now - lastRetryClick >= CFG.RetryInterval then
-            pcall(function()
-                local gui = lplr.PlayerGui:FindFirstChild("CompletionScreen")
-                if gui then
-                    local btn = gui:FindFirstChild("CompletionBorder")
-                    if btn then btn = btn:FindFirstChild("CompletionMain") end
-                    if btn then btn = btn:FindFirstChild("Retry") end
-                    if btn then btn = btn:FindFirstChild("TextButton") end
-                    
-                    if btn and btn.Visible then
-                        if firesignal then
-                            firesignal(btn.MouseButton1Click)
-                            print("✅ Retry clicked!")
-                        end
-                        lastRetryClick = now
-                    end
-                end
-            end)
-        end
-        
-        task.wait(0.2)
-    end
-end
-
--------------------------------------------------------------------------
--- AUTO DUNGEON SYSTEM
--------------------------------------------------------------------------
-local function GetPlayNewGui()
-    return lplr:WaitForChild("PlayerGui"):WaitForChild("PlayNew", 5)
 end
 
 local function ClickButton(button)
-    if not button then return false end
-    
+    if not button or not button.Visible then return false end
     pcall(function()
         if firesignal then
             firesignal(button.MouseButton1Click)
         else
             local pos = button.AbsolutePosition
-            local size = button.AbsoluteSize
-            local cx = pos.X + size.X * 0.5
-            local cy = pos.Y + size.Y * 0.5
-            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+            local center = pos + (button.AbsoluteSize * 0.5)
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
             task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
         end
     end)
-    
-    task.wait(0.2)
     return true
 end
 
-local function ScrollAndClick(targetBtn)
-    if not targetBtn then return end
-    
-    local scrollFrame = targetBtn:FindFirstAncestorOfClass("ScrollingFrame")
-    if scrollFrame then
-        local btnY = targetBtn.AbsolutePosition.Y
-        local scrollY = scrollFrame.AbsolutePosition.Y
-        local scrollH = scrollFrame.AbsoluteSize.Y
-        local currentCanvasY = scrollFrame.CanvasPosition.Y
-        local relativePos = (btnY - scrollY) + currentCanvasY
-        local centerPos = relativePos - (scrollH * 0.5) + (targetBtn.AbsoluteSize.Y * 0.5)
-        scrollFrame.CanvasPosition = Vector2.new(0, math.max(0, centerPos))
-        task.wait(0.4)
-    end
-    
-    ClickButton(targetBtn)
-end
-
-local function WaitForVisible(element, timeout)
-    local start = tick()
-    timeout = timeout or 5
-    while not element.Visible and (tick() - start) < timeout do
-        task.wait(0.1)
-    end
-    return element.Visible
-end
-
-local dungeonThread = nil
-local function RunAutoDungeonLoop()
-    while STATE.AutoDungeonEnabled do
-        pcall(function()
-            print("🚀 Starting Dungeon Cycle...")
-            local PlayNew = GetPlayNewGui()
-            if not PlayNew then return end
-
-            local SelectOption = PlayNew:WaitForChild("SelectOption", 5)
-            if SelectOption then
-                local StartBtn = SelectOption:FindFirstChild("StartButton")
-                if StartBtn then
-                    StartBtn = StartBtn:FindFirstChild("TextButton")
-                    if StartBtn then 
-                        ClickButton(StartBtn)
-                        print("✅ Clicked Start Button")
-                    end
-                end
-            end
-
-            task.wait(0.5)
-
-            local Gamemode = PlayNew:WaitForChild("Gamemode", 5)
-            if Gamemode and WaitForVisible(Gamemode, 5) then
-                task.wait(0.3)
-                local container = Gamemode:FindFirstChild("Container")
-                if container then
-                    local scrollFrame = container:FindFirstChild("ScrollingFrame")
-                    if scrollFrame then
-                        local modeBtn = nil
-                        if STATE.SelectedDungeon == "Normal Dungeon" then
-                            local d = scrollFrame:FindFirstChild("Dungeons")
-                            modeBtn = d and d:FindFirstChild("TextButton")
-                        elseif STATE.SelectedDungeon == "Raid Dungeon" then
-                            local r = scrollFrame:FindFirstChild("ElementalRaids")
-                            modeBtn = r and r:FindFirstChild("TextButton")
-                        elseif STATE.SelectedDungeon == "Infinite Tower" then
-                            local t = scrollFrame:FindFirstChild("InfiniteTower")
-                            modeBtn = t and t:FindFirstChild("TextButton")
-                        end
-                        if modeBtn then 
-                            ScrollAndClick(modeBtn)
-                            print("✅ Selected:", STATE.SelectedDungeon)
-                        end
-                    end
-                end
-            end
-
-            task.wait(0.5)
-
-            if STATE.SelectedDungeon == "Normal Dungeon" and STATE.SelectedMap ~= "" then
-                local MapPage = PlayNew:FindFirstChild("Main") or PlayNew:FindFirstChild("MainView")
-                if MapPage and WaitForVisible(MapPage, 5) then
-                    task.wait(0.5)
-                    local container = MapPage:FindFirstChild("Container")
-                    if container then
-                        local scrollFrame = container:FindFirstChild("ScrollingFrame")
-                        if scrollFrame then
-                            local mapFrame = scrollFrame:FindFirstChild(STATE.SelectedMap)
-                            if mapFrame then
-                                local btn = mapFrame:FindFirstChild("TextButton")
-                                if btn then 
-                                    ScrollAndClick(btn)
-                                    print("✅ Selected Map:", STATE.SelectedMap)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            task.wait(0.5)
-
-            local Settings = PlayNew:WaitForChild("DungeonSettings", 8)
-            if Settings and WaitForVisible(Settings, 5) then
-                local left = Settings:FindFirstChild("Left")
-                if left then
-                    local playSolo = left:FindFirstChild("PlaySolo")
-                    if playSolo then
-                        local btn = playSolo:FindFirstChild("TextButton")
-                        if btn then
-                            ClickButton(btn)
-                            print("✅ Entering Dungeon...")
-                        end
-                    end
-                end
-            end
-        end)
-        
-        task.wait(10)
-    end
+local function PressKey(key)
+    VirtualInputManager:SendKeyEvent(true, key, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, key, false, game)
 end
 
 -------------------------------------------------------------------------
--- AUTO FARM SYSTEM
+-- 4. UI SETUP
 -------------------------------------------------------------------------
-local SwingRemote = ReplicatedStorage:WaitForChild("Swing")
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
-local Overlap = OverlapParams.new()
-Overlap.FilterType = Enum.RaycastFilterType.Exclude
-Overlap.MaxParts = 15
-
-local CurrentTarget = nil
-local lastStartClick = 0
-local lastSwing = 0
-local SWING_COOLDOWN = 0.1
-
--- Noclip
-local noclipCon = nil
-local function EnableNoclip()
-    if noclipCon then return end
-    noclipCon = RunService.Stepped:Connect(function()
-        if STATE.AutoFarmEnabled and CachedChar then
-            for _, part in ipairs(CachedChar:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
-            end
-        end
-    end)
-    print("✅ Noclip Enabled")
-end
-
-local function DisableNoclip()
-    if noclipCon then
-        noclipCon:Disconnect()
-        noclipCon = nil
-        print("❌ Noclip Disabled")
-    end
-    if CachedChar then
-        for _, part in ipairs(CachedChar:GetDescendants()) do
-            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                part.CanCollide = true
-            end
-        end
-    end
-end
-
--- Danger Detection
-local function IsDangerPart(part)
-    if not part then return false end
-    
-    local cached = DangerCache[part]
-    if cached ~= nil then return cached end
-    
-    local name = part.Name:lower()
-    local isDanger = false
-    
-    for _, keyword in ipairs(CFG.DangerKeywords) do
-        if string.find(name, keyword, 1, true) then
-            isDanger = true
-            break
-        end
-    end
-    
-    DangerCache[part] = isDanger
-    return isDanger
-end
-
-local function IsPositionDangerous(position)
-    Overlap.FilterDescendantsInstances = {CachedChar}
-    local parts = Workspace:GetPartBoundsInBox(
-        CFrame.new(position),
-        Vector3.new(4, 6, 4),
-        Overlap
-    )
-    
-    for _, part in ipairs(parts) do
-        if IsDangerPart(part) then
-            return true
-        end
-    end
-    
-    return false
-end
-
-local function AmIInDanger()
-    if not CachedRoot then return false end
-    
-    if IsPositionDangerous(CachedRoot.Position) then
-        STATS.DangersDetected = STATS.DangersDetected + 1
-        return true
-    end
-    
-    return false
-end
-
--- Smart Safe Spot Finding
-local function FindSafeSpotSmartly(targetPos)
-    if not CachedRoot then return targetPos end
-    
-    STATS.EvasionAttempts = STATS.EvasionAttempts + 1
-    
-    local currentPos = CachedRoot.Position
-    local currentDist = (currentPos - targetPos).Magnitude
-    
-    if currentDist <= CFG.AttackDist + 2 and not IsPositionDangerous(currentPos) then
-        return currentPos
-    end
-    
-    local angleStep = 360 / CFG.AngleCheckCount
-    local bestSpot = nil
-    local bestScore = -1
-    
-    for i = 0, CFG.AngleCheckCount - 1 do
-        local angle = math.rad(i * angleStep)
-        local checkPos = targetPos + Vector3.new(
-            math.cos(angle) * CFG.SafeSpotRadius,
-            0,
-            math.sin(angle) * CFG.SafeSpotRadius
-        )
-        
-        if not IsPositionDangerous(checkPos) then
-            local distToTarget = (checkPos - targetPos).Magnitude
-            local score = 100 - distToTarget
-            
-            local angleFromCurrent = math.abs(math.deg(math.atan2(
-                checkPos.Z - currentPos.Z,
-                checkPos.X - currentPos.X
-            )))
-            if angleFromCurrent > 45 then
-                score = score + 20
-            end
-            
-            if score > bestScore then
-                bestScore = score
-                bestSpot = checkPos
-            end
-        end
-    end
-    
-    if bestSpot then
-        STATS.SafeSpotsFound = STATS.SafeSpotsFound + 1
-        return bestSpot
-    end
-    
-    if CFG.EscapeAsLastResort then
-        STATS.VerticalEscapes = STATS.VerticalEscapes + 1
-        return targetPos + Vector3.new(0, CFG.VerticalEscapeHeight, 0)
-    else
-        return currentPos
-    end
-end
-
--- Target Selection
-local function GetTarget()
-    UpdateEnemyCache()
-    
-    if #EnemyCache == 0 then return nil end
-    
-    if not CachedRoot then return nil end
-    local myPos = CachedRoot.Position
-    local nearest = nil
-    local minDist = CFG.SearchRange
-    
-    for _, data in ipairs(EnemyCache) do
-        if data.Enemy and data.Enemy.Parent and data.Root and data.Root.Parent then
-            local dist = (data.Position - myPos).Magnitude
-            if dist < minDist then
-                minDist = dist
-                nearest = data.Enemy
-            end
-        end
-    end
-    
-    return nearest
-end
-
--- Main Farm Loop
-local farmCon = nil
-local lastUpdate = 0
-local UPDATE_RATE = 0.1
-
-local function StartAutoFarm()
-    -- Stop existing connection first
-    if farmCon then
-        farmCon:Disconnect()
-        farmCon = nil
-        print("🔄 Stopped existing farm connection")
-    end
-    
-    -- Cleanup
-    RemoveBodyMovers()
-    
-    -- Update character
-    if not UpdateCharacterCache() then
-        warn("⚠️ Character not found, waiting...")
-        task.wait(2)
-        UpdateCharacterCache()
-    end
-    
-    if not CachedRoot then
-        warn("❌ No HumanoidRootPart found!")
-        return
-    end
-    
-    -- Create body movers
-    CreateBodyMovers()
-    
-    print("🟢 Auto Farm STARTED")
-    STATS.FarmActive = true
-    
-    farmCon = RunService.Heartbeat:Connect(function(dt)
-        if not STATE.AutoFarmEnabled then return end
-        
-        local now = tick()
-        if now - lastUpdate < UPDATE_RATE then return end
-        lastUpdate = now
-
-        -- Update Character if needed
-        if not CachedChar or not CachedChar.Parent or not CachedRoot or not CachedRoot.Parent then
-            if UpdateCharacterCache() and CachedRoot then
-                CreateBodyMovers()
-            else
-                return
-            end
-        end
-        
-        if not CachedHum or CachedHum.Health <= 0 then
-            return
-        end
-
-        -- Auto Start Dungeon
-        if now - lastStartClick >= 8 then
-            pcall(function()
-                local mainGui = lplr.PlayerGui:FindFirstChild("mainGui")
-                if mainGui then
-                    local startBtn = mainGui:FindFirstChild("startDungeon")
-                    if startBtn then
-                        startBtn = startBtn:FindFirstChild("TextButton")
-                        if startBtn and startBtn.Visible and firesignal then
-                            firesignal(startBtn.MouseButton1Click)
-                        end
-                    end
-                end
-            end)
-            lastStartClick = now
-        end
-
-        -- Target Management
-        if not CurrentTarget or not CurrentTarget.Parent then
-            CurrentTarget = GetTarget()
-        else
-            local tHum = CurrentTarget:FindFirstChild("Humanoid")
-            if not tHum or tHum.Health <= 0 then
-                CurrentTarget = GetTarget()
-            end
-        end
-
-        -- Combat Logic
-        if CurrentTarget then
-            local tRoot = CurrentTarget:FindFirstChild("HumanoidRootPart")
-            if tRoot and tRoot.Parent then
-                local tPos = tRoot.Position
-                local myPos = CachedRoot.Position
-                local distance = (tPos - myPos).Magnitude
-                
-                STATS.LastTarget = CurrentTarget.Name
-                
-                local inDanger = AmIInDanger()
-                local targetSpot = nil
-                
-                if inDanger then
-                    targetSpot = FindSafeSpotSmartly(tPos)
-                else
-                    if distance > CFG.AttackDist then
-                        targetSpot = FindSafeSpotSmartly(tPos)
-                    else
-                        targetSpot = myPos
-                    end
-                end
-                
-                local speed = inDanger and CFG.PanicSpeed or CFG.MoveSpeed
-                
-                -- Movement
-                if BodyVel then
-                    if (targetSpot - myPos).Magnitude > 2 then
-                        local direction = (targetSpot - myPos).Unit
-                        BodyVel.Velocity = direction * speed
-                    else
-                        BodyVel.Velocity = Vector3.zero
-                    end
-                end
-                
-                -- Rotation
-                if BodyGyro then
-                    local lookPos = Vector3.new(tPos.X, myPos.Y, tPos.Z)
-                    BodyGyro.CFrame = CFrame.new(myPos, lookPos)
-                end
-                
-                -- Attack
-                if distance <= CFG.AttackDist + 5 and now - lastSwing >= SWING_COOLDOWN then
-                    pcall(function()
-                        SwingRemote:FireServer()
-                        STATS.AttacksFired = STATS.AttacksFired + 1
-                    end)
-                    lastSwing = now
-                end
-            else
-                CurrentTarget = nil
-            end
-        else
-            if BodyVel then
-                BodyVel.Velocity = Vector3.zero
-            end
-            STATS.LastTarget = "None"
-        end
-    end)
-end
-
-local function StopAutoFarm()
-    print("🔴 Auto Farm STOPPING...")
-    STATS.FarmActive = false
-    
-    if farmCon then
-        farmCon:Disconnect()
-        farmCon = nil
-        print("✅ Farm connection disconnected")
-    end
-    
-    RemoveBodyMovers()
-    DisableNoclip()
-    CurrentTarget = nil
-    
-    print("🔴 Auto Farm STOPPED")
-end
-
--------------------------------------------------------------------------
--- UI CONTROLS - GENERAL TAB
--------------------------------------------------------------------------
-GeneralTab:Toggle({
-    Title = "Auto Dungeon",
-    Desc = "สร้างและเข้า Dungeon อัตโนมัติ",
-    Flag = "AutoDungeon",
-    Value = false,
-    Callback = function(state)
-        STATE.AutoDungeonEnabled = state
-        if state then
-            dungeonThread = task.spawn(RunAutoDungeonLoop)
-            Window:Notify({Title = "Auto Dungeon", Content = "🟢 เริ่มทำงานแล้ว!", Duration = 4})
-        else
-            if dungeonThread then
-                task.cancel(dungeonThread)
-                dungeonThread = nil
-            end
-            Window:Notify({Title = "Auto Dungeon", Content = "🔴 หยุดแล้ว", Duration = 4})
-        end
-    end
+local Window = WindUI:CreateWindow({
+    Title = "Hyper Premium",
+    Icon = "rbxassetid://10723415903",
+    Author = "Premium",
+    Folder = ConfigFolder, 
+    Size = UDim2.fromOffset(600, 400),
+    Transparent = true,
+    Theme = "Dark",
+    Resizable = true,
 })
 
-GeneralTab:Toggle({
+local GeneralTab = Window:Tab({ Title = "General", Icon = "home" })
+local SettingTab = Window:Tab({ Title = "Setting", Icon = "settings" })
+local ConfigTab = Window:Tab({ Title = "Config", Icon = "save" })
+local DebugTab = Window:Tab({ Title = "Debug", Icon = "terminal" })
+
+-- === [TAB 1] GENERAL ===
+local MainSection = GeneralTab:Section({ Title = "Main Functions" })
+
+MainSection:Toggle({
     Title = "Auto Farm",
-    Desc = "ฟาร์มศัตรูอัตโนมัติ (Smart Evasion)",
+    Desc = "Smart AI Farming",
     Flag = "AutoFarm",
     Value = false,
-    Callback = function(state)
-        STATE.AutoFarmEnabled = state
-        if state then
-            table.clear(EnemyCache)
-            table.clear(DangerCache)
-            STATS.AttacksFired = 0
-            STATS.DangersDetected = 0
-            STATS.EvasionAttempts = 0
-            STATS.SafeSpotsFound = 0
-            STATS.VerticalEscapes = 0
-            lastStartClick = 0
-            lastSwing = 0
-            EnableNoclip()
-            StartAutoFarm()
-            Window:Notify({Title = "Auto Farm", Content = "🟢 เริ่มฟาร์มแล้ว!", Duration = 4})
-        else
-            StopAutoFarm()
-            Window:Notify({Title = "Auto Farm", Content = "🔴 หยุดฟาร์ม", Duration = 4})
-        end
-    end
+    Callback = function(v) STATE.AutoFarmEnabled = v end
 })
 
-GeneralTab:Toggle({
+MainSection:Toggle({
+    Title = "Auto Skills",
+    Desc = "Use Q, E, R",
+    Flag = "AutoSkills",
+    Value = true,
+    Callback = function(v) STATE.AutoSkillsEnabled = v end
+})
+
+MainSection:Toggle({
     Title = "Auto Retry",
-    Desc = "กดปุ่ม Retry อัตโนมัติ",
+    Desc = "Replay Dungeon",
     Flag = "AutoRetry",
     Value = false,
-    Callback = function(state)
-        STATE.AutoRetryEnabled = state
-        lastRetryClick = 0
-        if state then
-            retryThread = task.spawn(RunAutoRetry)
-            Window:Notify({Title = "Auto Retry", Content = "🟢 เริ่มแล้ว!", Duration = 4})
-        else
-            if retryThread then
-                task.cancel(retryThread)
-                retryThread = nil
-            end
-            Window:Notify({Title = "Auto Retry", Content = "🔴 หยุดแล้ว", Duration = 4})
-        end
-    end
+    Callback = function(v) STATE.AutoRetryEnabled = v end
 })
 
-GeneralTab:Dropdown({
+local DungeonSection = GeneralTab:Section({ Title = "Dungeon Selector" })
+
+DungeonSection:Dropdown({
     Title = "Dungeon Type",
     Values = {"Normal Dungeon", "Raid Dungeon", "Infinite Tower"},
     Default = "Normal Dungeon",
     Flag = "DungeonType",
-    Callback = function(v) 
-        STATE.SelectedDungeon = v 
-        print("📍 Dungeon Type:", v)
-    end
+    Callback = function(v) STATE.SelectedDungeon = v end
 })
 
-local MapDropdown = GeneralTab:Dropdown({
+local MapDropdown = DungeonSection:Dropdown({
     Title = "Select Map",
-    Values = {"Refresh First"},
-    Flag = "SelectedMap",
-    Callback = function(v) 
-        STATE.SelectedMap = v 
-        print("🗺️ Selected Map:", v)
-    end
+    Values = {"Refresh First..."},
+    Flag = "MapSelect",
+    Callback = function(v) STATE.SelectedMap = v end
 })
 
-GeneralTab:Button({
-    Title = "🔄 Refresh Maps List",
+DungeonSection:Button({
+    Title = "Refresh Maps List",
     Callback = function()
-        pcall(function()
-            local PlayNew = lplr.PlayerGui:FindFirstChild("PlayNew")
-            local MapPage = PlayNew and (PlayNew:FindFirstChild("Main") or PlayNew:FindFirstChild("MainView"))
-            if MapPage then
-                local container = MapPage:FindFirstChild("Container")
-                if container then
-                    local scrollFrame = container:FindFirstChild("ScrollingFrame")
-                    if scrollFrame then
-                        local maps = {}
-                        for _, v in ipairs(scrollFrame:GetChildren()) do
-                            if (v:IsA("Frame") or v:IsA("ImageButton")) and not string.find(v.Name, "UI", 1, true) then
-                                table.insert(maps, v.Name)
-                            end
-                        end
-                        table.sort(maps)
-                        MapDropdown:Refresh(maps, true)
-                        Window:Notify({Title = "Maps", Content = "✅ Found " .. #maps .. " maps!", Duration = 3})
-                    end
-                end
-            else
-                Window:Notify({Title = "Warning", Content = "⚠️ เปิดหน้า Map Selection ก่อน!", Duration = 4})
+        local success, maps = pcall(function()
+            local list = {}
+            local scroll = lplr.PlayerGui.PlayNew.Main.Container.ScrollingFrame
+            for _,v in pairs(scroll:GetChildren()) do
+                if v:IsA("Frame") or v:IsA("ImageButton") then table.insert(list, v.Name) end
             end
+            return list
         end)
-    end
-})
-
--------------------------------------------------------------------------
--- CONFIG TAB
--------------------------------------------------------------------------
-ConfigTab:Section({Title = "Config Presets"})
-
-ConfigTab:Dropdown({
-    Title = "Load Config Preset",
-    Values = {"Default", "Aggressive", "Safe", "Speed"},
-    Default = "Default",
-    Flag = "ConfigPreset",
-    Callback = function(v)
-        if LoadConfigPreset(v) then
-            Window:Notify({Title = "Config", Content = "✅ Loaded: " .. v, Duration = 3})
+        
+        if success and #maps > 0 then
+            table.sort(maps)
+            MapDropdown:Refresh(maps, true)
+            Window:Notify({Title = "Maps", Content = "Found " .. #maps .. " maps", Duration = 3})
+        else
+            Window:Notify({Title = "Error", Content = "Open Map UI first!", Duration = 3})
         end
     end
 })
 
-ConfigTab:Section({Title = "Config Info"})
+-- === [TAB 2] SETTING ===
+local CombatSection = SettingTab:Section({ Title = "Combat" })
 
-local ConfigCurrentLabel = ConfigTab:Label({
-    Title = "Current Config",
-    Desc = "Loading...",
-})
-
-local ConfigDetailsLabel = ConfigTab:Label({
-    Title = "Settings",
-    Desc = "Loading...",
-})
-
--- Update Config Labels
-task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            ConfigCurrentLabel:Set({
-                Desc = "Active: " .. STATE.CurrentConfigName
-            })
-            
-            ConfigDetailsLabel:Set({
-                Desc = string.format([[
-Attack Dist: %d
-Move Speed: %d
-Panic Speed: %d
-Search Range: %d
-Safe Radius: %d
-Angle Checks: %d
-Escape Height: %d]],
-                    CFG.AttackDist,
-                    CFG.MoveSpeed,
-                    CFG.PanicSpeed,
-                    CFG.SearchRange,
-                    CFG.SafeSpotRadius,
-                    CFG.AngleCheckCount,
-                    CFG.VerticalEscapeHeight
-                )
-            })
-        end)
-    end
-end)
-
-ConfigTab:Section({Title = "Preset Descriptions"})
-
-ConfigTab:Label({
-    Title = "Default",
-    Desc = "สมดุล ทุกอย่างพอดี",
-})
-
-ConfigTab:Label({
-    Title = "Aggressive",
-    Desc = "เร็ว ใกล้ มีความเสี่ยง",
-})
-
-ConfigTab:Label({
-    Title = "Safe",
-    Desc = "ช้า ไกล ปลอดภัยสูง",
-})
-
-ConfigTab:Label({
-    Title = "Speed",
-    Desc = "เร็วมาก ฟาร์มเร็ว",
-})
-
--------------------------------------------------------------------------
--- SETTING TAB
--------------------------------------------------------------------------
-SettingTab:Section({Title = "Combat Settings"})
-
-SettingTab:Slider({
+CombatSection:Slider({
     Title = "Attack Distance",
-    Desc = "ระยะโจมตีศัตรู",
     Flag = "AttackDist",
-    Step = 1,
-    Value = {
-        Min = 6,
-        Max = 25,
-        Default = 12,
-    },
-    Callback = function(v)
-        CFG.AttackDist = v
-        print("⚙️ Attack Distance:", v)
-    end
+    Value = { Min = 5, Max = 25, Default = CFG.AttackDist },
+    Callback = function(v) CFG.AttackDist = v end
 })
 
-SettingTab:Slider({
+CombatSection:Slider({
+    Title = "Skill Cooldown",
+    Flag = "SkillCooldown",
+    Value = { Min = 0.5, Max = 5, Default = CFG.SkillCooldown },
+    Callback = function(v) CFG.SkillCooldown = v end
+})
+
+local MoveSection = SettingTab:Section({ Title = "Movement" })
+
+MoveSection:Slider({
     Title = "Move Speed",
-    Desc = "ความเร็วในการเคลื่อนที่",
     Flag = "MoveSpeed",
-    Step = 5,
-    Value = {
-        Min = 30,
-        Max = 150,
-        Default = 60,
-    },
-    Callback = function(v)
-        CFG.MoveSpeed = v
-        print("⚙️ Move Speed:", v)
-    end
+    Value = { Min = 16, Max = 150, Default = CFG.MoveSpeed },
+    Callback = function(v) CFG.MoveSpeed = v end
 })
 
-SettingTab:Slider({
+MoveSection:Slider({
     Title = "Panic Speed",
-    Desc = "ความเร็วเมื่ออยู่ในอันตราย",
     Flag = "PanicSpeed",
-    Step = 5,
-    Value = {
-        Min = 50,
-        Max = 200,
-        Default = 100,
-    },
-    Callback = function(v)
-        CFG.PanicSpeed = v
-        print("⚙️ Panic Speed:", v)
-    end
+    Value = { Min = 50, Max = 200, Default = CFG.PanicSpeed },
+    Callback = function(v) CFG.PanicSpeed = v end
 })
 
-SettingTab:Slider({
-    Title = "Search Range",
-    Desc = "ระยะค้นหาศัตรู",
-    Flag = "SearchRange",
-    Step = 50,
-    Value = {
-        Min = 500,
-        Max = 3000,
-        Default = 1500,
-    },
-    Callback = function(v)
-        CFG.SearchRange = v
-        print("⚙️ Search Range:", v)
-    end
+-- === [TAB 3] CONFIG (CUSTOM FIXED) ===
+local ConfigSection = ConfigTab:Section({ Title = "Manager" })
+
+local NewConfigName = "AutoSave"
+ConfigSection:Input({
+    Title = "Config Name",
+    Default = "AutoSave",
+    Placeholder = "Enter config name...",
+    Callback = function(text) NewConfigName = text end
 })
 
-SettingTab:Section({Title = "Evasion Settings"})
-
-SettingTab:Slider({
-    Title = "Safe Spot Radius",
-    Desc = "รัศมีในการหาจุดปลอดภัย",
-    Flag = "SafeSpotRadius",
-    Step = 1,
-    Value = {
-        Min = 8,
-        Max = 20,
-        Default = 12,
-    },
-    Callback = function(v)
-        CFG.SafeSpotRadius = v
-        print("⚙️ Safe Spot Radius:", v)
-    end
-})
-
-SettingTab:Slider({
-    Title = "Angle Check Count",
-    Desc = "จำนวนมุมที่เช็ค",
-    Flag = "AngleCheckCount",
-    Step = 2,
-    Value = {
-        Min = 4,
-        Max = 16,
-        Default = 8,
-    },
-    Callback = function(v)
-        CFG.AngleCheckCount = v
-        print("⚙️ Angle Check Count:", v)
-    end
-})
-
-SettingTab:Slider({
-    Title = "Vertical Escape Height",
-    Desc = "ความสูงในการหลบแนวตั้ง",
-    Flag = "VerticalEscape",
-    Step = 5,
-    Value = {
-        Min = 20,
-        Max = 100,
-        Default = 40,
-    },
-    Callback = function(v)
-        CFG.VerticalEscapeHeight = v
-        print("⚙️ Escape Height:", v)
-    end
-})
-
-SettingTab:Toggle({
-    Title = "Escape as Last Resort",
-    Desc = "หลบขึ้นบนเมื่อหาจุดไม่เจอ",
-    Flag = "EscapeLastResort",
-    Value = true,
-    Callback = function(state)
-        CFG.EscapeAsLastResort = state
-        print("⚙️ Escape Last Resort:", state)
-    end
-})
-
-SettingTab:Section({Title = "Other"})
-
-SettingTab:Slider({
-    Title = "Retry Interval",
-    Desc = "เวลาระหว่างการกด Retry",
-    Flag = "RetryInterval",
-    Step = 0.1,
-    Value = {
-        Min = 0.3,
-        Max = 3,
-        Default = 0.5,
-    },
-    Callback = function(v)
-        CFG.RetryInterval = v
-        print("⚙️ Retry Interval:", v)
-    end
-})
-
-SettingTab:Section({Title = "Config Save/Load"})
-
-SettingTab:Button({
-    Title = "💾 Save Config",
-    Desc = "บันทึกการตั้งค่า",
+ConfigSection:Button({
+    Title = "Save Config",
     Callback = function()
-        MainConfig:Save()
-        Window:Notify({Title = "Config", Content = "✅ บันทึกสำเร็จ!", Duration = 3})
+        SaveConfig(NewConfigName)
+        Window:Notify({Title = "Saved", Content = NewConfigName, Duration = 2})
     end
 })
 
-SettingTab:Button({
-    Title = "🔄 Load Config",
-    Desc = "โหลดการตั้งค่า",
+local ConfigDrop = ConfigSection:Dropdown({
+    Title = "Select Config",
+    Values = GetConfigList(), -- ใช้ Custom Function แทน
+    Default = "AutoSave",
+    Callback = function(v) NewConfigName = v end
+})
+
+ConfigSection:Button({
+    Title = "Load Config",
     Callback = function()
-        MainConfig:Load()
-        Window:Notify({Title = "Config", Content = "✅ โหลดสำเร็จ!", Duration = 3})
+        if LoadConfig(NewConfigName) then
+            Window:Notify({Title = "Loaded", Content = NewConfigName, Duration = 2})
+        else
+            Window:Notify({Title = "Error", Content = "Config not found!", Duration = 2})
+        end
     end
 })
 
-SettingTab:Button({
-    Title = "🗑️ Clear Cache",
-    Desc = "ล้างแคชทั้งหมด",
+ConfigSection:Button({
+    Title = "Refresh List",
     Callback = function()
-        table.clear(EnemyCache)
-        table.clear(DangerCache)
-        Window:Notify({Title = "Cache", Content = "✅ ล้างแคชแล้ว!", Duration = 3})
+        ConfigDrop:Refresh(GetConfigList(), true)
     end
 })
+
+local AutoConfigSection = ConfigTab:Section({ Title = "Automation" })
+
+-- Toggle นี้จะไปปรากฏแน่นอนเพราะแก้ Error บรรทัดบนแล้ว
+AutoConfigSection:Toggle({
+    Title = "Enable Auto Load",
+    Desc = "Load 'AutoSave' on startup",
+    Flag = "AutoLoadConfig",
+    Value = false,
+    Callback = function(v)
+        STATE.AutoLoadConfig = v
+    end
+})
+
+AutoConfigSection:Toggle({
+    Title = "Enable Auto Save",
+    Desc = "Save every 10s",
+    Flag = "AutoSaveEnabled",
+    Value = false,
+    Callback = function(v) STATE.AutoSaveEnabled = v end
+})
+
+-- === [TAB 4] DEBUG ===
+local DebugSection = DebugTab:Section({ Title = "Monitor" })
+local StatsLabel = DebugSection:Label({ Title = "Stats", Desc = "Loading..." })
+
+DebugSection:Button({ Title = "Reset Stats", Callback = function() STATS.EnemiesFound = 0 STATS.AttacksFired = 0 end })
 
 -------------------------------------------------------------------------
--- DEBUG TAB
+-- 5. LOGIC LOOPS
 -------------------------------------------------------------------------
-DebugTab:Section({Title = "Live Statistics"})
 
-local StatsLabel = DebugTab:Label({
-    Title = "Real-time Stats",
-    Desc = "Loading...",
-})
+-- Enemy Detection Logic
+local EnemyCache = {}
+local function UpdateEnemyCache()
+    table.clear(EnemyCache)
+    local f = Workspace:FindFirstChild("Enemies")
+    if f then
+        for _, e in ipairs(f:GetChildren()) do
+            if e:IsA("Model") then
+                local h, r = e:FindFirstChild("Humanoid"), e:FindFirstChild("HumanoidRootPart")
+                if h and r and h.Health > 0 then
+                    table.insert(EnemyCache, { Model = e, Root = r, Pos = r.Position })
+                end
+            end
+        end
+    end
+    STATS.EnemiesFound = #EnemyCache
+end
 
--- Update Stats
+-- Farm Loop
 task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            local status = STATS.FarmActive and "🟢 ACTIVE" or "🔴 IDLE"
-            StatsLabel:Set({
-                Desc = string.format([[
-%s | Config: %s
-Enemies: %d | Attacks: %d
-Dangers: %d | Evasions: %d
-Safe Spots: %d | Escapes: %d
-Respawns: %d
-Target: %s]],
-                    status,
-                    STATE.CurrentConfigName,
-                    STATS.EnemiesFound,
-                    STATS.AttacksFired,
-                    STATS.DangersDetected,
-                    STATS.EvasionAttempts,
-                    STATS.SafeSpotsFound,
-                    STATS.VerticalEscapes,
-                    STATS.Respawns,
-                    STATS.LastTarget
-                )
-            })
-        end)
-    end
-end)
-
-DebugTab:Section({Title = "Testing Tools"})
-
-DebugTab:Button({
-    Title = "🔍 Test Enemy Detection",
-    Desc = "ตรวจหาศัตรู",
-    Callback = function()
-        UpdateEnemyCache()
-        Window:Notify({Title = "Debug", Content = "Found " .. #EnemyCache .. " enemies!", Duration = 3})
-    end
-})
-
-DebugTab:Button({
-    Title = "⚠️ Test Danger Detection",
-    Desc = "ตรวจสอบอันตราย",
-    Callback = function()
-        local inDanger = AmIInDanger()
-        Window:Notify({Title = "Debug", Content = inDanger and "⚠️ IN DANGER!" or "✅ Safe", Duration = 3})
-    end
-})
-
-DebugTab:Button({
-    Title = "🎯 Find Safe Spots",
-    Desc = "ทดสอบหาจุดปลอดภัย",
-    Callback = function()
-        if CurrentTarget then
-            local tRoot = CurrentTarget:FindFirstChild("HumanoidRootPart")
-            if tRoot then
-                FindSafeSpotSmartly(tRoot.Position)
-                Window:Notify({Title = "Debug", Content = "✅ Safe spot search complete!", Duration = 3})
+    local SwingRemote = ReplicatedStorage:FindFirstChild("Swing")
+    local lastQ, lastE, lastR = 0, 0, 0
+    
+    RunService.Stepped:Connect(function()
+        if STATE.AutoFarmEnabled and CachedChar then
+            for _, v in ipairs(CachedChar:GetDescendants()) do
+                if v:IsA("BasePart") then v.CanCollide = false end
+            end
+        end
+    end)
+    
+    while true do
+        local dt = RunService.Heartbeat:Wait()
+        local now = tick()
+        
+        if STATE.AutoFarmEnabled then
+            STATS.FarmActive = true
+            if not UpdateCharacterCache() or CachedHum.Health <= 0 then
+                task.wait(1)
             else
-                Window:Notify({Title = "Debug", Content = "❌ No target root!", Duration = 3})
+                if not BodyVel or not BodyVel.Parent then CreateBodyMovers() end
+                UpdateEnemyCache()
+                
+                local target, minDist = nil, CFG.SearchRange
+                for _, data in ipairs(EnemyCache) do
+                    local dist = (data.Pos - CachedRoot.Position).Magnitude
+                    if dist < minDist then minDist = dist target = data end
+                end
+                
+                if target then
+                    STATS.LastTarget = target.Model.Name
+                    local dist = (target.Pos - CachedRoot.Position).Magnitude
+                    local movePos = target.Pos
+                    
+                    if dist > 3 then
+                        BodyVel.Velocity = (movePos - CachedRoot.Position).Unit * CFG.MoveSpeed
+                    else
+                        BodyVel.Velocity = Vector3.zero
+                    end
+                    BodyGyro.CFrame = CFrame.new(CachedRoot.Position, Vector3.new(target.Pos.X, CachedRoot.Position.Y, target.Pos.Z))
+                    
+                    if dist <= CFG.AttackDist + 5 then
+                        if SwingRemote then SwingRemote:FireServer() end
+                        STATS.AttacksFired = STATS.AttacksFired + 1
+                        if STATE.AutoSkillsEnabled then
+                            if now - lastQ >= CFG.SkillCooldown then PressKey(Enum.KeyCode.Q) lastQ = now end
+                            if now - lastE >= CFG.SkillCooldown + 0.5 then PressKey(Enum.KeyCode.E) lastE = now end
+                            if now - lastR >= CFG.SkillCooldown + 1.0 then PressKey(Enum.KeyCode.R) lastR = now end
+                        end
+                    end
+                else
+                    BodyVel.Velocity = Vector3.zero
+                    STATS.LastTarget = "Scanning..."
+                end
             end
         else
-            Window:Notify({Title = "Debug", Content = "❌ No target!", Duration = 3})
+            STATS.FarmActive = false
+            RemoveBodyMovers()
         end
     end
-})
+end)
 
-DebugTab:Section({Title = "Controls"})
-
-DebugTab:Button({
-    Title = "🔄 Reset Stats",
-    Desc = "รีเซ็ตสถิติ",
-    Callback = function()
-        STATS.AttacksFired = 0
-        STATS.DangersDetected = 0
-        STATS.EvasionAttempts = 0
-        STATS.SafeSpotsFound = 0
-        STATS.VerticalEscapes = 0
-        Window:Notify({Title = "Debug", Content = "✅ Stats Reset!", Duration = 3})
+-- Stats & Auto Save Loop
+task.spawn(function()
+    local saveTimer = 0
+    while STATE.IsRunning do
+        task.wait(1)
+        
+        pcall(function()
+            StatsLabel:Set({
+                Title = STATE.AutoFarmEnabled and "🟢 RUNNING" or "🔴 IDLE",
+                Desc = string.format("Target: %s\nEnemies: %d | Atk: %d", STATS.LastTarget, STATS.EnemiesFound, STATS.AttacksFired)
+            })
+        end)
+        
+        if STATE.AutoSaveEnabled then
+            saveTimer = saveTimer + 1
+            if saveTimer >= 10 then
+                SaveConfig("AutoSave") -- ใช้ Custom Function
+                saveTimer = 0
+            end
+        end
+        
+        if STATE.AutoRetryEnabled then
+            pcall(function()
+                local gui = lplr.PlayerGui:FindFirstChild("CompletionScreen")
+                local btn = gui and gui.CompletionBorder.CompletionMain.Retry.TextButton
+                if btn and btn.Visible then ClickButton(btn) end
+            end)
+        end
     end
-})
+end)
 
-DebugTab:Button({
-    Title = "🔄 Force Refresh Character",
-    Desc = "รีเฟรชตัวละคร",
-    Callback = function()
-        UpdateCharacterCache()
-        Window:Notify({Title = "Debug", Content = "✅ Character Refreshed!", Duration = 3})
-    end
-})
-
-DebugTab:Button({
-    Title = "🛑 Emergency Stop All",
-    Desc = "หยุดทุกอย่างทันที",
-    Callback = function()
-        StopAutoFarm()
-        STATE.AutoDungeonEnabled = false
-        STATE.AutoRetryEnabled = false
-        STATE.AutoFarmEnabled = false
-        Window:Notify({Title = "Debug", Content = "🛑 All Stopped!", Duration = 3})
-    end
-})
+Window:SelectTab(GeneralTab)
+Window:Notify({Title = "Hyper Premium", Content = "Loaded Successfully!", Duration = 3})
 
 -------------------------------------------------------------------------
--- AUTO LOAD CONFIG
+-- 6. AUTO LOAD SYSTEM (Safe Check)
 -------------------------------------------------------------------------
 task.spawn(function()
-    task.wait(1)
-    pcall(function()
-        MainConfig:Load()
-        print("✅ Config Auto-Loaded!")
-    end)
+    task.wait(1) 
+    -- เช็คไฟล์ AutoSave ก่อนโหลด
+    local autoSavePath = ConfigFolder .. "/AutoSave.json"
+    if isfile(autoSavePath) then
+        local content = readfile(autoSavePath)
+        local success, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+        
+        if success and decoded and decoded.AutoLoadConfig == true then
+            LoadConfig("AutoSave")
+            Window:Notify({Title = "Auto Load", Content = "✅ Loaded Config!", Duration = 5})
+        end
+    end
 end)
