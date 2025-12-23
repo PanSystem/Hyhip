@@ -1,11 +1,11 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local VirtualUser = game:GetService("VirtualUser") -- เพิ่มสำหรับ Anti-AFK
+local VirtualUser = game:GetService("VirtualUser")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService") -- เพิ่มสำหรับ Server Hop
+local TeleportService = game:GetService("TeleportService")
 
 local lplr = Players.LocalPlayer
 
@@ -19,15 +19,15 @@ local STATE = {
     AutoSkillsEnabled = true,
     AutoSaveEnabled = false,
     AutoLoadConfig = false,
-    AntiAFKEnabled = true, -- เพิ่ม
-    AutoLootEnabled = false, -- เพิ่ม
+    AntiAFKEnabled = true,
+    AutoLootEnabled = false,
     IsRunning = true,
     SelectedDungeon = "Normal Dungeon",
     SelectedMap = "",
     CurrentConfigName = "Default",
 }
 
--- ปรับปรุง CFG แยก Delay สกิล
+-- [แก้ไข] ใช้ SkillCooldown ตัวเดียวคุมทั้งหมด
 local CFG = {
     AttackDist = 12,
     MoveSpeed = 60,
@@ -36,11 +36,7 @@ local CFG = {
     RetryInterval = 0.5,
     SafeSpotRadius = 12,
     
-    -- แยก Delay รายสกิล
-    DelayQ = 1.0,
-    DelayE = 3.0,
-    DelayR = 5.0,
-    -------------------
+    SkillCooldown = 1.0, -- ใช้ตัวเดียว (0.1 - 5)
     
     VerticalEscapeHeight = 40,
     AngleCheckCount = 8,
@@ -48,27 +44,27 @@ local CFG = {
     DangerKeywords = {"hitbox", "damage", "area", "burn", "lava", "cone", "skill", "atk", "projectile", "bullet", "poison", "trap", "explosion", "fire", "hazard"},
 }
 
--- Config Presets (อัปเดตให้รองรับ Delay แยก)
+-- [แก้ไข] Presets กลับมาใช้ SkillCooldown
 local CONFIG_PRESETS = {
     Default = {
         AttackDist = 12, MoveSpeed = 60, PanicSpeed = 100, SearchRange = 1500,
         SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40,
-        DelayQ = 1.0, DelayE = 3.0, DelayR = 5.0
+        SkillCooldown = 1.0
     },
     Aggressive = {
         AttackDist = 10, MoveSpeed = 80, PanicSpeed = 120, SearchRange = 2000,
         SafeSpotRadius = 10, AngleCheckCount = 8, VerticalEscapeHeight = 35,
-        DelayQ = 0.5, DelayE = 2.0, DelayR = 4.0
+        SkillCooldown = 0.5
     },
     Safe = {
         AttackDist = 15, MoveSpeed = 50, PanicSpeed = 90, SearchRange = 1200,
         SafeSpotRadius = 15, AngleCheckCount = 12, VerticalEscapeHeight = 50,
-        DelayQ = 1.5, DelayE = 4.0, DelayR = 6.0
+        SkillCooldown = 1.5
     },
     Speed = {
         AttackDist = 12, MoveSpeed = 100, PanicSpeed = 150, SearchRange = 2500,
         SafeSpotRadius = 12, AngleCheckCount = 8, VerticalEscapeHeight = 40,
-        DelayQ = 0.8, DelayE = 2.5, DelayR = 4.5
+        SkillCooldown = 0.2
     },
 }
 
@@ -98,7 +94,7 @@ local function SaveConfig(name)
     for k,v in pairs(CFG) do data[k] = v end
     data.AutoLoadConfig = STATE.AutoLoadConfig
     data.AutoSkillsEnabled = STATE.AutoSkillsEnabled
-    data.AntiAFKEnabled = STATE.AntiAFKEnabled -- Save AntiAFK state
+    data.AntiAFKEnabled = STATE.AntiAFKEnabled
     writefile(file, HttpService:JSONEncode(data))
     print("✅ Config Saved: " .. name)
     return true
@@ -708,17 +704,17 @@ local function StartAutoFarm()
                     lastSwing = now
                 end
                 
-                -- UPDATED SKILL LOGIC (Separate Delays)
+                -- [แก้ไข] ใช้ SkillCooldown อ้างอิงทั้งหมด
                 if STATE.AutoSkillsEnabled and distance <= CFG.AttackDist + 5 then
-                    if now - lastQ >= CFG.DelayQ then 
+                    if now - lastQ >= CFG.SkillCooldown then 
                         PressKey(Enum.KeyCode.Q) 
                         lastQ = now 
                     end
-                    if now - lastE >= CFG.DelayE then 
+                    if now - lastE >= CFG.SkillCooldown then 
                         PressKey(Enum.KeyCode.E) 
                         lastE = now 
                     end
-                    if now - lastR >= CFG.DelayR then 
+                    if now - lastR >= CFG.SkillCooldown then 
                         PressKey(Enum.KeyCode.R) 
                         lastR = now 
                     end
@@ -804,7 +800,7 @@ Window:EditOpenButton({
 })
 
 Window:Tag({
-    Title = "v1.1.0",
+    Title = "v1.2.0",
     Icon = "github",
     Color = Color3.fromHex("#30ff6a"),
     Radius = 6,
@@ -813,7 +809,7 @@ Window:Tag({
 local GeneralTab = Window:Tab({ Title = "General", Icon = "home" })
 local ConfigTab = Window:Tab({ Title = "Config", Icon = "save" })
 local SettingTab = Window:Tab({ Title = "Setting", Icon = "settings" })
-local MiscTab = Window:Tab({ Title = "Misc", Icon = "wrench" }) -- New Tab
+local MiscTab = Window:Tab({ Title = "Misc", Icon = "wrench" })
 local DebugTab = Window:Tab({ Title = "Debug", Icon = "bug" })
 
 -------------------------------------------------------------------------
@@ -930,20 +926,6 @@ DungeonSec:Button({
 -------------------------------------------------------------------------
 -- CONFIG TAB
 -------------------------------------------------------------------------
-Window:EditOpenButton({
-    Title = "Open / Close",
-    Icon = "monitor",
-    CornerRadius = UDim.new(0,16),
-    StrokeThickness = 2,
-    Color = ColorSequence.new( -- gradient
-        Color3.fromHex("FF0F7B"), 
-        Color3.fromHex("F89B29")
-    ),
-    OnlyMobile = false,
-    Enabled = true,
-    Draggable = true,
-})
-
 ConfigTab:Section({ Title = "⚙️ Config Presets" })
 
 ConfigTab:Dropdown({ 
@@ -1029,11 +1011,15 @@ SettingTab:Slider({ Title = "Move Speed", Desc = "ความเร็วใน
 SettingTab:Slider({ Title = "Panic Speed", Desc = "ความเร็วเมื่ออยู่ในอันตราย", Flag = "PanicSpeed", Step = 5, Value = {Min = 50, Max = 200, Default = CFG.PanicSpeed}, Callback = function(v) CFG.PanicSpeed = v end })
 SettingTab:Slider({ Title = "Search Range", Desc = "ระยะค้นหาศัตรู", Flag = "SearchRange", Step = 50, Value = {Min = 500, Max = 3000, Default = CFG.SearchRange}, Callback = function(v) CFG.SearchRange = v end })
 
--- UPDATED SKILL SLIDERS
-SettingTab:Section({ Title = "🕒 Skill Cooldowns (Seconds)" })
-SettingTab:Slider({ Title = "Skill Q Delay", Desc = "เว้นระยะการกด Q (วินาที)", Flag = "DelayQ", Step = 0.1, Value = {Min = 0.1, Max = 10, Default = CFG.DelayQ}, Callback = function(v) CFG.DelayQ = v end })
-SettingTab:Slider({ Title = "Skill E Delay", Desc = "เว้นระยะการกด E (วินาที)", Flag = "DelayE", Step = 0.1, Value = {Min = 0.1, Max = 10, Default = CFG.DelayE}, Callback = function(v) CFG.DelayE = v end })
-SettingTab:Slider({ Title = "Skill R Delay", Desc = "เว้นระยะการกด R (วินาที)", Flag = "DelayR", Step = 0.1, Value = {Min = 0.1, Max = 20, Default = CFG.DelayR}, Callback = function(v) CFG.DelayR = v end })
+-- [แก้ไข] ใช้ Slider เดียวคุมทั้งหมด 0.1 - 5
+SettingTab:Slider({ 
+    Title = "Global Skill Delay", 
+    Desc = "ความเร็วในการกดสกิล (Q/E/R)", 
+    Flag = "SkillCooldown", 
+    Step = 0.1, 
+    Value = {Min = 0.1, Max = 5, Default = CFG.SkillCooldown}, 
+    Callback = function(v) CFG.SkillCooldown = v end 
+})
 
 SettingTab:Section({ Title = "🛡️ Evasion Settings" })
 SettingTab:Slider({ Title = "Safe Spot Radius", Desc = "รัศมีในการหาจุดปลอดภัย", Flag = "SafeSpotRadius", Step = 1, Value = {Min = 8, Max = 20, Default = CFG.SafeSpotRadius}, Callback = function(v) CFG.SafeSpotRadius = v end })
@@ -1046,7 +1032,7 @@ SettingTab:Slider({ Title = "Retry Interval", Desc = "เวลาระหว�
 SettingTab:Button({ Title = "🗑️ Clear Cache", Desc = "ล้างแคชทั้งหมด", Callback = function() table.clear(EnemyCache) table.clear(DangerCache) Window:Notify({Title = "Cache", Content = "✅ ล้างแคชแล้ว!", Duration = 3}) end })
 
 -------------------------------------------------------------------------
--- MISC TAB (Extension Added)
+-- MISC TAB
 -------------------------------------------------------------------------
 local UtilitySec = MiscTab:Section({ Title = "🛠️ Utilities" })
 
@@ -1196,4 +1182,4 @@ task.spawn(function()
 end)
 
 Window:SelectTab(GeneralTab)
-Window:Notify({Title = "Hyper Premium", Content = "✅ System Ready! v1.1.0 (Full)", Duration = 4})
+Window:Notify({Title = "Hyper Premium", Content = "✅ System Ready! v1.2.0 (Global Delay)", Duration = 4})
